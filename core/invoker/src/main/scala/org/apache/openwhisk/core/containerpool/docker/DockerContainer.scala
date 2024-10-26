@@ -30,7 +30,7 @@ import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.entity.ActivationResponse.{ConnectionError, MemoryExhausted}
-import org.apache.openwhisk.core.entity.ByteSize
+import org.apache.openwhisk.core.entity.{ActivationEntityLimit, ByteSize}
 import org.apache.openwhisk.core.entity.size._
 import akka.stream.scaladsl.{Framing, Source}
 import akka.stream.stage._
@@ -55,7 +55,7 @@ object DockerContainer {
    * @param network network to launch the container in
    * @param dnsServers list of dns servers to use in the container
    * @param name optional name for the container
-   * @param useRunc use runc to pause/unpause container?
+   * @param useRunc use docker-runc to pause/unpause container?
    * @return a Future which either completes with a DockerContainer or one of two specific failures
    */
   def create(transid: TransactionId,
@@ -63,7 +63,6 @@ object DockerContainer {
              registryConfig: Option[RuntimesRegistryConfig] = None,
              memory: ByteSize = 256.MB,
              cpuShares: Int = 0,
-             cpuLimit: Option[Double] = None,
              environment: Map[String, String] = Map.empty,
              network: String = "bridge",
              dnsServers: Seq[String] = Seq.empty,
@@ -102,7 +101,6 @@ object DockerContainer {
       dnsSearch.flatMap(d => Seq("--dns-search", d)) ++
       dnsOptions.flatMap(d => Seq(dnsOptString, d)) ++
       name.map(n => Seq("--name", n)).getOrElse(Seq.empty) ++
-      cpuLimit.map(c => Seq("--cpus", c.toString)).getOrElse(Seq.empty) ++
       params
 
     val registryConfigUrl = registryConfig.map(_.url).getOrElse("")
@@ -129,14 +127,11 @@ object DockerContainer {
     for {
       pullSuccessful <- pulled
       id <- docker.run(imageToUse, args).recoverWith {
-        case BrokenDockerContainer(brokenId, _, exitStatus) if exitStatus.isEmpty || exitStatus.contains(125) =>
+        case BrokenDockerContainer(brokenId, _) =>
           // Remove the broken container - but don't wait or check for the result.
           // If the removal fails, there is nothing we could do to recover from the recovery.
           docker.rm(brokenId)
           Future.failed(WhiskContainerStartupError(Messages.resourceProvisionError))
-        case BrokenDockerContainer(brokenId, _, exitStatus) if exitStatus.contains(127) =>
-          docker.rm(brokenId)
-          Future.failed(BlackboxStartupError(s"${Messages.commandNotFoundError} in image ${imageToUse}"))
         case _ =>
           // Iff the pull was successful, we assume that the error is not due to an image pull error, otherwise
           // the docker run was a backup measure to try and start the container anyway. If it fails again, we assume
@@ -220,23 +215,32 @@ class DockerContainer(protected val id: ContainerId,
     body: JsObject,
     timeout: FiniteDuration,
     maxConcurrent: Int,
-    maxResponse: ByteSize,
-    truncation: ByteSize,
     retry: Boolean = false,
     reschedule: Boolean = false)(implicit transid: TransactionId): Future[RunResult] = {
     val started = Instant.now()
     val http = httpConnection.getOrElse {
       val conn = if (Container.config.akkaClient) {
-        new AkkaContainerClient(addr.host, addr.port, timeout, 1024)
+        new AkkaContainerClient(
+          addr.host,
+          addr.port,
+          timeout,
+          ActivationEntityLimit.MAX_ACTIVATION_ENTITY_LIMIT,
+          ActivationEntityLimit.MAX_ACTIVATION_ENTITY_TRUNCATION_LIMIT,
+          1024)
       } else {
-        new ApacheBlockingContainerClient(s"${addr.host}:${addr.port}", timeout, maxConcurrent)
+        new ApacheBlockingContainerClient(
+          s"${addr.host}:${addr.port}",
+          timeout,
+          ActivationEntityLimit.MAX_ACTIVATION_ENTITY_LIMIT,
+          ActivationEntityLimit.MAX_ACTIVATION_ENTITY_TRUNCATION_LIMIT,
+          maxConcurrent)
       }
       httpConnection = Some(conn)
       conn
     }
 
     http
-      .post(path, body, maxResponse, truncation, retry, reschedule)
+      .post(path, body, retry, reschedule)
       .flatMap { response =>
         val finished = Instant.now()
 

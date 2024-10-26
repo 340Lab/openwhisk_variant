@@ -29,11 +29,6 @@ distDocker.dependsOn ':common:scala:distDocker', 'distTar'
 
 project.archivesBaseName = "openwhisk-controller"
 
-scoverage {
-    scoverageVersion.set("${gradle.scala.scoverageVersion}")
-    scoverageScalaVersion.set("${gradle.scala.scoverageScalaVersion}")
-}
-
 ext.coverageDirs = [
     "${buildDir}/classes/scala/scoverage",
     "${project(':common:scala').buildDir.absolutePath}/classes/scala/scoverage"
@@ -41,14 +36,12 @@ ext.coverageDirs = [
 distDockerCoverage.dependsOn ':common:scala:scoverageClasses', 'scoverageClasses'
 
 dependencies {
-    implementation "org.scala-lang:scala-library:${gradle.scala.version}"
-    implementation project(':common:scala')
-    implementation project(':core:invoker')
-    implementation project(':core:scheduler')
-
-    implementation "com.lightbend.akka.management:akka-management-cluster-bootstrap_${gradle.scala.depVersion}:${gradle.akka_management.version}"
-    implementation "com.lightbend.akka.discovery:akka-discovery-kubernetes-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
-    implementation "com.lightbend.akka.discovery:akka-discovery-marathon-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
+    compile "org.scala-lang:scala-library:${gradle.scala.version}"
+    compile "com.lightbend.akka.management:akka-management-cluster-bootstrap_${gradle.scala.depVersion}:${gradle.akka_management.version}"
+    compile "com.lightbend.akka.discovery:akka-discovery-kubernetes-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
+    compile "com.lightbend.akka.discovery:akka-discovery-marathon-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
+    compile project(':common:scala')
+    compile project(':core:invoker')
 }
 
 mainClassName = "org.apache.openwhisk.core.controller.Controller"

@@ -22,10 +22,8 @@ import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.model.headers.BasicHttpCredentials
 import akka.http.scaladsl.server.Route
 import org.apache.openwhisk.common.{Logging, TransactionId}
-import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.http.BasicRasService
 import org.apache.openwhisk.http.ErrorResponse.terminate
-import pureconfig.loadConfigOrThrow
 import spray.json.PrettyPrinter
 
 import scala.concurrent.ExecutionContext
@@ -46,11 +44,9 @@ class DefaultInvokerServer(val invoker: InvokerCore, systemUsername: String, sys
     super.routes ~ extractCredentials {
       case Some(BasicHttpCredentials(username, password)) if username == systemUsername && password == systemPassword =>
         (path("enable") & post) {
-          complete(invoker.enable())
+          invoker.enable()
         } ~ (path("disable") & post) {
-          complete(invoker.disable())
-        } ~ (path("isEnabled") & get) {
-          complete(invoker.isEnabled())
+          invoker.disable()
         }
       case _ => terminate(StatusCodes.Unauthorized)
     }
@@ -59,8 +55,9 @@ class DefaultInvokerServer(val invoker: InvokerCore, systemUsername: String, sys
 
 object DefaultInvokerServer extends InvokerServerProvider {
 
-  private val invokerUsername = loadConfigOrThrow[String](ConfigKeys.whiskInvokerUsername)
-  private val invokerPassword = loadConfigOrThrow[String](ConfigKeys.whiskInvokerPassword)
+  // TODO: TBD, after FPCInvokerReactive is ready, can read the credentials from pureconfig
+  val invokerUsername = "admin"
+  val invokerPassword = "admin"
 
   override def instance(
     invoker: InvokerCore)(implicit ec: ExecutionContext, actorSystem: ActorSystem, logger: Logging): BasicRasService =

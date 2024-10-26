@@ -42,11 +42,9 @@ import scala.concurrent.{ExecutionContext, Future}
 class CouchDbRestClient(protocol: String, host: String, port: Int, username: String, password: String, db: String)(
   implicit system: ActorSystem,
   logging: Logging)
-    extends PoolingRestClient(protocol, host, port, 16 * 1024)(
-      system,
-      system.dispatchers.lookup("dispatchers.couch-dispatcher")) {
+    extends PoolingRestClient(protocol, host, port, 16 * 1024) {
 
-  protected implicit val context: ExecutionContext = system.dispatchers.lookup("dispatchers.couch-dispatcher")
+  protected implicit override val context: ExecutionContext = system.dispatchers.lookup("dispatchers.couch-dispatcher")
 
   // Headers common to all requests.
   protected val baseHeaders: List[HttpHeader] =

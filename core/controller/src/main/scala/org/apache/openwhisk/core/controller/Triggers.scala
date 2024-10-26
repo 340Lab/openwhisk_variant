@@ -18,6 +18,7 @@
 package org.apache.openwhisk.core.controller
 
 import java.time.{Clock, Instant}
+
 import scala.collection.immutable.Map
 import scala.concurrent.Future
 import scala.util.Try
@@ -27,7 +28,7 @@ import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
 import akka.http.scaladsl.model.HttpMethods.POST
 import akka.http.scaladsl.model.StatusCodes.{Accepted, BadRequest, InternalServerError, NoContent, OK, ServerError}
 import akka.http.scaladsl.model.Uri.Path
-import akka.http.scaladsl.model.headers.{`Timeout-Access`, Authorization}
+import akka.http.scaladsl.model.headers.Authorization
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.server.{RequestContext, RouteResult}
 import akka.http.scaladsl.unmarshalling.{Unmarshal, Unmarshaller}
@@ -150,19 +151,7 @@ trait WhiskTriggersApi extends WhiskCollectionAPI {
                 response = ActivationResponse.success(payload orElse Some(JsObject.empty)),
                 version = trigger.version,
                 duration = None)
-              val headers = JsObject(
-                Map(new WebApiDirectives().headers -> request.headers
-                  .collect {
-                    case h if h.name != `Timeout-Access`.name => h.lowercaseName -> h.value
-                  }
-                  .toMap
-                  .toJson))
-
-              val mergedPayload = Some {
-                (headers.fields ++ (payload getOrElse JsObject.empty).fields).toJson.asJsObject
-              }
-
-              val args: JsObject = trigger.parameters.merge(mergedPayload).getOrElse(JsObject.empty)
+              val args: JsObject = trigger.parameters.merge(payload).getOrElse(JsObject.empty)
 
               activateRules(user, args, trigger.rules.getOrElse(Map.empty))
                 .map(results => triggerActivation.withLogs(ActivationLogs(results.map(_.toJson.compactPrint).toVector)))
@@ -172,7 +161,7 @@ trait WhiskTriggersApi extends WhiskCollectionAPI {
                     triggerActivation
                 }
                 .map { activation =>
-                  activationStore.storeAfterCheck(activation, false, None, None, context)
+                  activationStore.storeAfterCheck(activation, false, None, context)
                 }
 
               respondWithActivationIdHeader(triggerActivationId) {

@@ -100,7 +100,7 @@ class ContainerPoolTests
     EntityPath("actionSpace"),
     EntityName("actionName"),
     exec,
-    limits = ActionLimits(concurrency = IntraConcurrencyLimit(if (concurrencyEnabled) 3 else 1)))
+    limits = ActionLimits(concurrency = ConcurrencyLimit(if (concurrencyEnabled) 3 else 1)))
   val differentAction = action.copy(name = EntityName("actionName2"))
   val largeAction =
     action.copy(
@@ -134,7 +134,7 @@ class ContainerPoolTests
   }
 
   def poolConfig(userMemory: ByteSize) =
-    ContainerPoolConfig(userMemory, 0.5, false, 2.second, 1.minute, None, 100, 3, false, 1.second, 10)
+    ContainerPoolConfig(userMemory, 0.5, false, 2.second, 1.minute, None, 100, 3, false, 1.second)
 
   behavior of "ContainerPool"
 
@@ -818,8 +818,7 @@ class ContainerPoolTests
         100,
         3,
         false,
-        1.second,
-        10)
+        1.second)
     val initialCount = 2
     val pool =
       system.actorOf(
@@ -865,8 +864,7 @@ class ContainerPoolTests
         100,
         3,
         false,
-        1.second,
-        10)
+        1.second)
     val minCount = 0
     val initialCount = 2
     val maxCount = 4
@@ -1103,13 +1101,13 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
 
     val data = warmedData(
       active = maxConcurrent,
-      action = createAction(limits = ActionLimits(concurrency = IntraConcurrencyLimit(maxConcurrent))))
+      action = createAction(limits = ActionLimits(concurrency = ConcurrencyLimit(maxConcurrent))))
     val pool = Map('warm -> data)
     ContainerPool.schedule(data.action, data.invocationNamespace, pool) shouldBe None
 
     val data2 = warmedData(
       active = maxConcurrent - 1,
-      action = createAction(limits = ActionLimits(concurrency = IntraConcurrencyLimit(maxConcurrent))))
+      action = createAction(limits = ActionLimits(concurrency = ConcurrencyLimit(maxConcurrent))))
     val pool2 = Map('warm -> data2)
 
     ContainerPool.schedule(data2.action, data2.invocationNamespace, pool2) shouldBe Some('warm, data2)
@@ -1120,7 +1118,7 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     val concurrencyEnabled = Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean)
     val maxConcurrent = if (concurrencyEnabled) 25 else 1
 
-    val action = createAction(limits = ActionLimits(concurrency = IntraConcurrencyLimit(maxConcurrent)))
+    val action = createAction(limits = ActionLimits(concurrency = ConcurrencyLimit(maxConcurrent)))
     val data = warmingData(active = maxConcurrent - 1, action = action)
     val pool = Map('warming -> data)
     ContainerPool.schedule(data.action, data.invocationNamespace, pool) shouldBe Some('warming, data)
@@ -1135,7 +1133,7 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     val concurrencyEnabled = Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean)
     val maxConcurrent = if (concurrencyEnabled) 25 else 1
 
-    val action = createAction(limits = ActionLimits(concurrency = IntraConcurrencyLimit(maxConcurrent)))
+    val action = createAction(limits = ActionLimits(concurrency = ConcurrencyLimit(maxConcurrent)))
     val data = warmingColdData(active = maxConcurrent - 1, action = action)
     val data2 = warmedData(active = maxConcurrent - 1, action = action)
     val pool = Map('warming -> data, 'warm -> data2)
@@ -1146,7 +1144,7 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     val concurrencyEnabled = Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean)
     val maxConcurrent = if (concurrencyEnabled) 25 else 1
 
-    val action = createAction(limits = ActionLimits(concurrency = IntraConcurrencyLimit(maxConcurrent)))
+    val action = createAction(limits = ActionLimits(concurrency = ConcurrencyLimit(maxConcurrent)))
     val data = warmingColdData(active = maxConcurrent - 1, action = action)
     val pool = Map('warmingCold -> data)
     ContainerPool.schedule(data.action, data.invocationNamespace, pool) shouldBe Some('warmingCold, data)
@@ -1162,7 +1160,7 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     val concurrencyEnabled = Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean)
     val maxConcurrent = if (concurrencyEnabled) 25 else 1
 
-    val action = createAction(limits = ActionLimits(concurrency = IntraConcurrencyLimit(maxConcurrent)))
+    val action = createAction(limits = ActionLimits(concurrency = ConcurrencyLimit(maxConcurrent)))
     val data = warmingColdData(active = maxConcurrent - 1, action = action)
     val data2 = warmedData(active = maxConcurrent - 1, action = action)
     val pool = Map('warmingCold -> data, 'warm -> data2)
@@ -1173,7 +1171,7 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     val concurrencyEnabled = Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean)
     val maxConcurrent = if (concurrencyEnabled) 25 else 1
 
-    val action = createAction(limits = ActionLimits(concurrency = IntraConcurrencyLimit(maxConcurrent)))
+    val action = createAction(limits = ActionLimits(concurrency = ConcurrencyLimit(maxConcurrent)))
     val data = warmingColdData(active = maxConcurrent - 1, action = action)
     val data2 = warmingData(active = maxConcurrent - 1, action = action)
     val pool = Map('warmingCold -> data, 'warming -> data2)
@@ -1239,7 +1237,7 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
   }
 
   it should "remove expired in order of expiration" in {
-    val poolConfig = ContainerPoolConfig(0.MB, 0.5, false, 2.second, 10.seconds, None, 1, 3, false, 1.second, 10)
+    val poolConfig = ContainerPoolConfig(0.MB, 0.5, false, 2.second, 10.seconds, None, 1, 3, false, 1.second)
     val exec = CodeExecAsString(RuntimeManifest("actionKind", ImageName("testImage")), "testCode", None)
     //use a second kind so that we know sorting is not isolated to the expired of each kind
     val exec2 = CodeExecAsString(RuntimeManifest("actionKind2", ImageName("testImage")), "testCode", None)
@@ -1263,7 +1261,7 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
 
   it should "remove only the prewarmExpirationLimit of expired prewarms" in {
     //limit prewarm removal to 2
-    val poolConfig = ContainerPoolConfig(0.MB, 0.5, false, 2.second, 10.seconds, None, 2, 3, false, 1.second, 10)
+    val poolConfig = ContainerPoolConfig(0.MB, 0.5, false, 2.second, 10.seconds, None, 2, 3, false, 1.second)
     val exec = CodeExecAsString(RuntimeManifest("actionKind", ImageName("testImage")), "testCode", None)
     val memoryLimit = 256.MB
     val prewarmConfig =
@@ -1289,7 +1287,7 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
 
   it should "remove only the expired prewarms regardless of minCount" in {
     //limit prewarm removal to 100
-    val poolConfig = ContainerPoolConfig(0.MB, 0.5, false, 2.second, 10.seconds, None, 100, 3, false, 1.second, 10)
+    val poolConfig = ContainerPoolConfig(0.MB, 0.5, false, 2.second, 10.seconds, None, 100, 3, false, 1.second)
     val exec = CodeExecAsString(RuntimeManifest("actionKind", ImageName("testImage")), "testCode", None)
     val memoryLimit = 256.MB
     //minCount is 2 - should leave at least 2 prewarms when removing expired

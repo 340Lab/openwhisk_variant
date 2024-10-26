@@ -29,7 +29,6 @@ import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
 import akka.http.scaladsl.model.FormData
 import akka.http.scaladsl.model.HttpEntity
 import akka.http.scaladsl.model.MediaTypes
-import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.model.StatusCodes._
 import akka.http.scaladsl.model.HttpCharsets
 import akka.http.scaladsl.model.HttpHeader
@@ -118,21 +117,12 @@ class WebActionsApiTests extends FlatSpec with Matchers with WebActionsApiBaseTe
 }
 
 trait WebActionsApiBaseTests extends ControllerTestCommon with BeforeAndAfterEach with WhiskWebActionsApi {
-
-  val systemPayloadLimit = ActivationEntityLimit.MAX_ACTIVATION_ENTITY_LIMIT
-  val namespacePayloadLimit = systemPayloadLimit - 100.KB
-
   val uuid = UUID()
   val systemId = Subject()
   val systemKey = BasicAuthenticationAuthKey(uuid, Secret())
   val systemIdentity =
     Future.successful(
-      Identity(
-        systemId,
-        Namespace(EntityName(systemId.asString), uuid),
-        systemKey,
-        rights = Privilege.ALL,
-        limits = UserLimits(maxPayloadSize = Option(namespacePayloadLimit))))
+      Identity(systemId, Namespace(EntityName(systemId.asString), uuid), systemKey, rights = Privilege.ALL))
   val namespace = EntityPath(systemId.asString)
   val proxyNamespace = namespace.addPath(EntityName("proxy"))
   override lazy val entitlementProvider = new TestingEntitlementProvider(whiskConfig, loadBalancer)
@@ -149,7 +139,6 @@ trait WebActionsApiBaseTests extends ControllerTestCommon with BeforeAndAfterEac
   var requireAuthenticationKey = "example-web-action-api-key"
   var invocationCount = 0
   var invocationsAllowed = 0
-
   lazy val testFixturesToGc = {
     implicit val tid = transid()
     Seq(
@@ -271,7 +260,7 @@ trait WebActionsApiBaseTests extends ControllerTestCommon with BeforeAndAfterEac
   override protected[controller] def invokeAction(
     user: Identity,
     action: WhiskActionMetaData,
-    payload: Option[JsValue],
+    payload: Option[JsObject],
     waitForResponse: Option[FiniteDuration],
     cause: Option[ActivationId])(implicit transid: TransactionId): Future[Either[ActivationId, WhiskActivation]] = {
     invocationCount = invocationCount + 1
@@ -281,14 +270,10 @@ trait WebActionsApiBaseTests extends ControllerTestCommon with BeforeAndAfterEac
       // 1. the package name for the action (to confirm that this resolved to systemId)
       // 2. the action name (to confirm that this resolved to the expected action)
       // 3. the payload received by the action which consists of the action.params + payload
-      val content = payload match {
-        case Some(JsObject(fields)) => action.parameters.merge(Some(JsObject(fields)))
-        case _                      => Some(action.parameters.toJsObject)
-      }
       val result = actionResult getOrElse JsObject(
         "pkg" -> action.namespace.toJson,
         "action" -> action.name.toJson,
-        "content" -> content.get)
+        "content" -> action.parameters.merge(payload).get)
 
       val activation = WhiskActivation(
         action.namespace,
@@ -929,21 +914,6 @@ trait WebActionsApiBaseTests extends ControllerTestCommon with BeforeAndAfterEac
       }
     }
 
-    it should s"use non-standard action status code to terminate an http response (auth? ${creds.isDefined})" in {
-      implicit val tid = transid()
-
-      Seq(s"$systemId/proxy/export_c.http").foreach { path =>
-        allowedMethods.foreach { m =>
-          actionResult = Some(JsObject(webApiDirectives.statusCode -> JsNumber(444)))
-          invocationsAllowed += 1
-
-          m(s"$testRoutePath/$path") ~> Route.seal(routes(creds)) ~> check {
-            status should be(StatusCodes.custom(444, ""))
-          }
-        }
-      }
-    }
-
     it should s"use default field projection for extension (auth? ${creds.isDefined})" in {
       implicit val tid = transid()
 
@@ -1514,18 +1484,17 @@ trait WebActionsApiBaseTests extends ControllerTestCommon with BeforeAndAfterEac
       }
     }
 
-    it should s"reject requests when entity size exceeds allowed system limit (auth? ${creds.isDefined})" in {
+    it should s"reject requests when entity size exceeds allowed limit (auth? ${creds.isDefined})" in {
       implicit val tid = transid()
 
       Seq(s"$systemId/proxy/export_c.json").foreach { path =>
-        val largeEntity = "a" * (systemPayloadLimit.toBytes.toInt + 1)
+        val largeEntity = "a" * (allowedActivationEntitySize.toInt + 1)
 
         val content = s"""{"a":"$largeEntity"}"""
         Post(s"$testRoutePath/$path", content.parseJson.asJsObject) ~> Route.seal(routes(creds)) ~> check {
           status should be(PayloadTooLarge)
           val expectedErrorMsg = Messages.entityTooBig(
-            // must contains namespace's payload limit size in error message
-            SizeError(fieldDescriptionForSizeError, (largeEntity.length + 8).B, namespacePayloadLimit.toBytes.B))
+            SizeError(fieldDescriptionForSizeError, (largeEntity.length + 8).B, allowedActivationEntitySize.B))
           confirmErrorWithTid(responseAs[JsObject], Some(expectedErrorMsg))
         }
 
@@ -1533,50 +1502,7 @@ trait WebActionsApiBaseTests extends ControllerTestCommon with BeforeAndAfterEac
         Post(s"$testRoutePath/$path", form) ~> Route.seal(routes(creds)) ~> check {
           status should be(PayloadTooLarge)
           val expectedErrorMsg = Messages.entityTooBig(
-            // must contains namespace's payload limit size in error message
-            SizeError(fieldDescriptionForSizeError, (largeEntity.length + 2).B, namespacePayloadLimit.toBytes.B))
-          confirmErrorWithTid(responseAs[JsObject], Some(expectedErrorMsg))
-        }
-      }
-    }
-
-    it should s"allow requests when entity size does not exceed allowed namespace limit (auth? ${creds.isDefined})" in {
-      implicit val tid = transid()
-
-      Seq(s"$systemId/proxy/export_c.json").foreach { path =>
-        val largeEntity = "a" * (namespacePayloadLimit.toBytes.toInt - 10)
-
-        val content = s"""{"a":"$largeEntity"}"""
-        Post(s"$testRoutePath/$path", content.parseJson.asJsObject) ~> Route.seal(routes(creds)) ~> check {
-          status should be(OK)
-        }
-
-        val form = FormData(Map("a" -> largeEntity))
-        Post(s"$testRoutePath/$path", form) ~> Route.seal(routes(creds)) ~> check {
-          status should be(OK)
-        }
-      }
-    }
-
-    it should s"reject requests when entity size exceeds allowed namespace limit (auth? ${creds.isDefined})" in {
-      implicit val tid = transid()
-
-      Seq(s"$systemId/proxy/export_c.json").foreach { path =>
-        val largeEntity = "a" * (namespacePayloadLimit.toBytes.toInt + 1)
-
-        val content = s"""{"a":"$largeEntity"}"""
-        Post(s"$testRoutePath/$path", content.parseJson.asJsObject) ~> Route.seal(routes(creds)) ~> check {
-          status should be(PayloadTooLarge)
-          val expectedErrorMsg = Messages.entityTooBig(
-            SizeError(fieldDescriptionForSizeError, (largeEntity.length + 8).B, namespacePayloadLimit.toBytes.B))
-          confirmErrorWithTid(responseAs[JsObject], Some(expectedErrorMsg))
-        }
-
-        val form = FormData(Map("a" -> largeEntity))
-        Post(s"$testRoutePath/$path", form) ~> Route.seal(routes(creds)) ~> check {
-          status should be(PayloadTooLarge)
-          val expectedErrorMsg = Messages.entityTooBig(
-            SizeError(fieldDescriptionForSizeError, (largeEntity.length + 2).B, namespacePayloadLimit.toBytes.B))
+            SizeError(fieldDescriptionForSizeError, (largeEntity.length + 2).B, allowedActivationEntitySize.B))
           confirmErrorWithTid(responseAs[JsObject], Some(expectedErrorMsg))
         }
       }
@@ -2031,16 +1957,11 @@ trait WebActionsApiBaseTests extends ControllerTestCommon with BeforeAndAfterEac
 
     it should s"allowed string based status code (auth? ${creds.isDefined})" in {
       implicit val tid = transid()
-      invocationsAllowed += 3
+      invocationsAllowed += 2
 
       actionResult = Some(JsObject(webApiDirectives.statusCode -> JsString("200")))
       Head(s"$testRoutePath/$systemId/proxy/export_c.http") ~> Route.seal(routes(creds)) ~> check {
         status should be(OK)
-      }
-
-      actionResult = Some(JsObject(webApiDirectives.statusCode -> JsString("444")))
-      Head(s"$testRoutePath/$systemId/proxy/export_c.http") ~> Route.seal(routes(creds)) ~> check {
-        status should be(StatusCodes.custom(444, ""))
       }
 
       actionResult = Some(JsObject(webApiDirectives.statusCode -> JsString("xyz")))

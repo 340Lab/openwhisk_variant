@@ -18,45 +18,31 @@
 package org.apache.openwhisk.core.scheduler
 
 import akka.Done
-import akka.actor.{ActorRef, ActorRefFactory, ActorSelection, ActorSystem, CoordinatedShutdown, Props}
-import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
-import akka.management.scaladsl.AkkaManagement
-import akka.management.cluster.bootstrap.ClusterBootstrap
-import akka.pattern.ask
+import akka.actor.{ActorRef, ActorRefFactory, ActorSelection, ActorSystem, CoordinatedShutdown}
 import akka.util.Timeout
 import com.typesafe.config.ConfigValueFactory
-import io.altoo.akka.serialization.kryo.DefaultKryoInitializer
-import io.altoo.akka.serialization.kryo.serializer.scala.ScalaKryo
 import kamon.Kamon
 import org.apache.openwhisk.common.Https.HttpsConfig
 import org.apache.openwhisk.common._
+import org.apache.openwhisk.core.{ConfigKeys, WhiskConfig}
 import org.apache.openwhisk.core.WhiskConfig.{servicePort, _}
 import org.apache.openwhisk.core.ack.{MessagingActiveAck, UserEventSender}
 import org.apache.openwhisk.core.connector._
 import org.apache.openwhisk.core.database.{ActivationStoreProvider, NoDocumentException, UserContext}
 import org.apache.openwhisk.core.entity._
-import org.apache.openwhisk.core.etcd.EtcdKV.{QueueKeys, SchedulerKeys}
-import org.apache.openwhisk.core.etcd.EtcdType.ByteStringToString
-import org.apache.openwhisk.core.etcd.{EtcdClient, EtcdConfig, EtcdWorker}
-import org.apache.openwhisk.core.scheduler.container.{ContainerManager, CreationJobManager}
-import org.apache.openwhisk.core.scheduler.grpc.ActivationServiceImpl
-import org.apache.openwhisk.core.scheduler.queue._
-import org.apache.openwhisk.core.service.{DataManagementService, LeaseKeepAliveService, WatcherService}
-import org.apache.openwhisk.core.{ConfigKeys, WhiskConfig}
-import org.apache.openwhisk.grpc.ActivationServiceHandler
+import org.apache.openwhisk.core.etcd.{EtcdClient, EtcdConfig}
+import org.apache.openwhisk.core.service.{LeaseKeepAliveService, WatcherService}
 import org.apache.openwhisk.http.BasicHttpService
 import org.apache.openwhisk.spi.SpiLoader
 import org.apache.openwhisk.utils.ExecutionContextFactory
-import pureconfig.generic.auto._
 import pureconfig.loadConfigOrThrow
 import spray.json.{DefaultJsonProtocol, _}
 
-import scala.collection.JavaConverters
 import scala.concurrent.duration._
 import scala.concurrent.{Await, Future}
 import scala.language.postfixOps
 import scala.util.{Failure, Success, Try}
+import pureconfig.generic.auto._
 
 class Scheduler(schedulerId: SchedulerInstanceId, schedulerEndpoints: SchedulerEndpoints)(implicit config: WhiskConfig,
                                                                                           actorSystem: ActorSystem,
@@ -69,12 +55,10 @@ class Scheduler(schedulerId: SchedulerInstanceId, schedulerEndpoints: SchedulerE
   val producer = msgProvider.getProducer(config, Some(ActivationEntityLimit.MAX_ACTIVATION_LIMIT))
 
   val maxPeek = loadConfigOrThrow[Int](ConfigKeys.schedulerMaxPeek)
-  val etcdClient = EtcdClient(loadConfigOrThrow[EtcdConfig](ConfigKeys.etcd))
+  val etcdClient = EtcdClient(loadConfigOrThrow[EtcdConfig](ConfigKeys.etcd).hosts)
   val watcherService: ActorRef = actorSystem.actorOf(WatcherService.props(etcdClient))
   val leaseService =
     actorSystem.actorOf(LeaseKeepAliveService.props(etcdClient, schedulerId, watcherService))
-
-  val schedulingConfig = loadConfigOrThrow[SchedulingConfig](ConfigKeys.schedulerScheduling)
 
   implicit val entityStore = WhiskEntityStore.datastore()
   private val activationStore =
@@ -93,53 +77,24 @@ class Scheduler(schedulerId: SchedulerInstanceId, schedulerEndpoints: SchedulerE
       case Failure(t)   => logging.error(this, s"failed to save activation $activation, error: ${t.getMessage}")
     }
   }
-  val durationCheckerProvider = SpiLoader.get[DurationCheckerProvider]
-  val durationChecker = durationCheckerProvider.instance(actorSystem, logging)
+  val durationCheckerProvider = "" // TODO: TBD
+  val durationChecker = "" // TODO: TBD
 
   override def getState: Future[(List[(SchedulerInstanceId, Int)], Int)] = {
-    logging.info(this, s"getting the queue states")
-    etcdClient
-      .getPrefix(s"${QueueKeys.inProgressPrefix}/${QueueKeys.queuePrefix}")
-      .map(res => {
-        JavaConverters
-          .asScalaIteratorConverter(res.getKvsList.iterator())
-          .asScala
-          .map(kv => ByteStringToString(kv.getValue))
-          .count(_ == schedulerId.asString)
-      })
-      .flatMap { creationCount =>
-        etcdClient
-          .get(SchedulerKeys.scheduler(schedulerId))
-          .map(res => {
-            JavaConverters
-              .asScalaIteratorConverter(res.getKvsList.iterator())
-              .asScala
-              .map { kv =>
-                SchedulerStates.parse(kv.getValue).getOrElse(SchedulerStates(schedulerId, -1, schedulerEndpoints))
-              }
-              .map { schedulerState =>
-                (schedulerState.sid, schedulerState.queueSize)
-              }
-              .toList
-          })
-          .map { list =>
-            (list, creationCount)
-          }
-      }
+    Future.successful((List((schedulerId, 0)), 0)) // TODO: TBD, after etcdClient is ready, can implement it
   }
 
   override def getQueueSize: Future[Int] = {
-    queueManager.ask(QueueSize)(Timeout(1.minute)).mapTo[Int]
+    Future.successful(0) // TODO: TBD, after queueManager is ready, can implement it
   }
 
   override def getQueueStatusData: Future[List[StatusData]] = {
-    queueManager.ask(GetState)(Timeout(1.minute)).mapTo[Future[List[StatusData]]].flatten
+    Future.successful(List(StatusData("ns", "fqn", 0, "Running", "data"))) // TODO: TBD, after queueManager is ready, can implement it
   }
 
   override def disable(): Unit = {
     logging.info(this, s"Gracefully shutting down the scheduler")
-    containerManager ! GracefulShutdown
-    queueManager ! GracefulShutdown
+    // TODO: TBD, after containerManager and queueManager are ready, can implement it
   }
 
   private def getUserLimit(invocationNamespace: String): Future[Int] = {
@@ -158,67 +113,27 @@ class Scheduler(schedulerId: SchedulerInstanceId, schedulerEndpoints: SchedulerE
       }
   }
 
-  private val etcdWorkerFactory = (f: ActorRefFactory) => f.actorOf(EtcdWorker.props(etcdClient, leaseService))
+  private val etcdWorkerFactory = "" // TODO: TBD
 
   /**
    * This component is in charge of storing data to ETCD.
    * Even if any error happens we can assume the data will be eventually available in the ETCD by this component.
    */
-  val dataManagementService: ActorRef =
-    actorSystem.actorOf(DataManagementService.props(watcherService, etcdWorkerFactory))
+  val dataManagementService = "" // TODO: TBD
 
-  val feedFactory = (f: ActorRefFactory,
-                     description: String,
-                     topic: String,
-                     maxActiveAcksPerPoll: Int,
-                     processAck: Array[Byte] => Future[Unit]) => {
-    val consumer = msgProvider.getConsumer(config, topic, topic, maxActiveAcksPerPoll)
-    f.actorOf(Props(new MessageFeed(description, logging, consumer, maxActiveAcksPerPoll, 1.second, processAck)))
-  }
-
-  val creationJobManagerFactory: ActorRefFactory => ActorRef =
-    factory => {
-      factory.actorOf(CreationJobManager.props(feedFactory, schedulerId, dataManagementService))
-    }
+  val creationJobManagerFactory = "" // TODO: TBD
 
   /**
    * This component is responsible for creating containers for a given action.
    * It relies on the creationJobManager to manage the container creation job.
    */
-  val containerManager: ActorRef =
-    actorSystem.actorOf(
-      ContainerManager.props(creationJobManagerFactory, msgProvider, schedulerId, etcdClient, config, watcherService))
+  val containerManager = "" // TODO: TBD
 
   /**
    * This is a factory to create memory queues.
    * In the new architecture, each action is given its own dedicated queue.
    */
-  val memoryQueueFactory
-    : (ActorRefFactory, String, FullyQualifiedEntityName, DocRevision, WhiskActionMetaData) => ActorRef =
-    (factory, invocationNamespace, fqn, revision, actionMetaData) => {
-      // Todo: Change this to SPI
-      val decisionMaker = factory.actorOf(SchedulingDecisionMaker.props(invocationNamespace, fqn, schedulingConfig))
-
-      factory.actorOf(
-        MemoryQueue.props(
-          etcdClient,
-          durationChecker,
-          fqn,
-          producer,
-          schedulingConfig,
-          invocationNamespace,
-          revision,
-          schedulerEndpoints,
-          actionMetaData,
-          dataManagementService,
-          watcherService,
-          containerManager,
-          decisionMaker,
-          schedulerId: SchedulerInstanceId,
-          ack,
-          store: (TransactionId, WhiskActivation, UserContext) => Future[Any],
-          getUserLimit: String => Future[Int]))
-    }
+  val memoryQueueFactory = "" // TODO: TBD
 
   val topic = s"${Scheduler.topicPrefix}scheduler${schedulerId.asString}"
   val schedulerConsumer =
@@ -229,22 +144,9 @@ class Scheduler(schedulerId: SchedulerInstanceId, schedulerEndpoints: SchedulerE
   /**
    * This is one of the major components which take charge of managing queues and coordinating requests among the scheduler, controllers, and invokers.
    */
-  val queueManager = actorSystem.actorOf(
-    QueueManager.props(
-      entityStore,
-      WhiskActionMetaData.get,
-      etcdClient,
-      schedulerEndpoints,
-      schedulerId,
-      dataManagementService,
-      watcherService,
-      ack,
-      store: (TransactionId, WhiskActivation, UserContext) => Future[Any],
-      memoryQueueFactory,
-      schedulerConsumer),
-    QueueManager.actorName)
+  val queueManager = "" // TODO: TBD
 
-  val serviceHandlers: HttpRequest => Future[HttpResponse] = ActivationServiceHandler.apply(ActivationServiceImpl())
+  //val serviceHandlers: HttpRequest => Future[HttpResponse] = ActivationServiceHandler.apply(ActivationServiceImpl())  TODO: TBD
 }
 
 case class CmdLineArgs(uniqueName: Option[String] = None, id: Option[Int] = None, displayedName: Option[String] = None)
@@ -262,7 +164,6 @@ trait SchedulerCore {
 object Scheduler {
 
   protected val protocol = loadConfigOrThrow[String]("whisk.scheduler.protocol")
-  protected val useClusterBootstrap = loadConfigOrThrow[Boolean]("whisk.cluster.use-cluster-bootstrap")
 
   val topicPrefix = loadConfigOrThrow[String](ConfigKeys.kafkaTopicsPrefix)
 
@@ -275,8 +176,12 @@ object Scheduler {
       schedulerHost -> null,
       schedulerAkkaPort -> null,
       schedulerRpcPort -> null,
-      WhiskConfig.actionInvokeConcurrentLimit -> null) ++
+      WhiskConfig.actionInvokePerMinuteLimit -> null,
+      WhiskConfig.actionInvokeConcurrentLimit -> null,
+      WhiskConfig.triggerFirePerMinuteLimit -> null) ++
       kafkaHosts ++
+      zookeeperHosts ++
+      wskApiHost ++
       ExecManifest.requiredProperties
 
   def initKamon(instance: SchedulerInstanceId): Unit = {
@@ -292,11 +197,6 @@ object Scheduler {
       ActorSystem(name = "scheduler-actor-system", defaultExecutionContext = Some(ec))
 
     implicit val logger = new AkkaLogging(akka.event.Logging.getLogger(actorSystem, this))
-
-    if (useClusterBootstrap) {
-      AkkaManagement(actorSystem).start()
-      ClusterBootstrap(actorSystem).start()
-    }
 
     // Prepare Kamon shutdown
     CoordinatedShutdown(actorSystem).addTask(CoordinatedShutdown.PhaseActorSystemTerminate, "shutdownKamon") { () =>
@@ -331,7 +231,7 @@ object Scheduler {
     val msgProvider = SpiLoader.get[MessagingProvider]
 
     Seq(
-      (topicPrefix + "scheduler" + instanceId.asString, "scheduler", Some(ActivationEntityLimit.MAX_ACTIVATION_LIMIT)),
+      (topicPrefix + "scheduler" + instanceId.asString, "actions", Some(ActivationEntityLimit.MAX_ACTIVATION_LIMIT)),
       (
         topicPrefix + "creationAck" + instanceId.asString,
         "creationAck",
@@ -349,17 +249,12 @@ object Scheduler {
         // Create scheduler
         val scheduler = new Scheduler(instanceId, schedulerEndpoints)
 
-        Http()
-          .newServerAt("0.0.0.0", port = rpcPort)
-          .bind(scheduler.serviceHandlers)
-          .foreach { _ =>
-            val httpsConfig =
-              if (Scheduler.protocol == "https") Some(loadConfigOrThrow[HttpsConfig]("whisk.controller.https"))
-              else None
+        // TODO: Add Akka-grpc handler
+        val httpsConfig =
+          if (Scheduler.protocol == "https") Some(loadConfigOrThrow[HttpsConfig]("whisk.controller.https")) else None
 
-            BasicHttpService.startHttpService(FPCSchedulerServer.instance(scheduler).route, port, httpsConfig)(
-              actorSystem)
-          }
+        BasicHttpService.startHttpService(FPCSchedulerServer.instance(scheduler).route, port, httpsConfig)(actorSystem)
+
       case Failure(t) =>
         abort(s"Invalid runtimes manifest: $t")
     }
@@ -391,28 +286,13 @@ case class SchedulerStates(sid: SchedulerInstanceId, queueSize: Int, endpoints: 
   def getRemoteRef(name: String)(implicit context: ActorRefFactory): ActorSelection = {
     implicit val ec = context.dispatcher
 
-    val path = s"akka://scheduler-actor-system@${endpoints.asAkkaEndpoint}/user/${name}"
+    val path = s"akka//scheduler-actor-system@${endpoints.asAkkaEndpoint}/user/${name}"
     context.actorSelection(path)
   }
 
   def getSchedulerId(): SchedulerInstanceId = sid
 
   def serialize = SchedulerStates.serdes.write(this).compactPrint
-
-  override def equals(that: Any): Boolean =
-    that match {
-      case that: SchedulerStates => {
-        this.queueSize == that.queueSize
-      }
-      case _ => false
-    }
-
-  override def hashCode: Int = {
-    var result = 1
-    val prime = 31
-    result = prime * result + queueSize.hashCode()
-    result
-  }
 }
 
 object SchedulerStates extends DefaultJsonProtocol {
@@ -420,16 +300,4 @@ object SchedulerStates extends DefaultJsonProtocol {
   implicit val serdes = jsonFormat(SchedulerStates.apply, "sid", "queueSize", "endpoints")
 
   def parse(states: String) = Try(serdes.read(states.parseJson))
-}
-
-case class SchedulingConfig(staleThreshold: FiniteDuration,
-                            checkInterval: FiniteDuration,
-                            dropInterval: FiniteDuration,
-                            allowOverProvisionBeforeThrottle: Boolean,
-                            namespaceOverProvisionBeforeThrottleRatio: Double)
-
-class CompatibleKryoInitializer extends DefaultKryoInitializer {
-  override def preInit(kryo: ScalaKryo): Unit = {
-    kryo.setDefaultSerializer(classOf[com.esotericsoftware.kryo.serializers.CompatibleFieldSerializer[_]])
-  }
 }

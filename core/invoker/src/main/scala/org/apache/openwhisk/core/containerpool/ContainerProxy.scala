@@ -250,7 +250,6 @@ class ContainerProxy(factory: (TransactionId,
                                Boolean,
                                ByteSize,
                                Int,
-                               Option[Double],
                                Option[ExecutableWhiskAction]) => Future[Container],
                      sendActiveAck: ActiveAck,
                      storeActivation: (TransactionId, WhiskActivation, Boolean, UserContext) => Future[Any],
@@ -289,7 +288,6 @@ class ContainerProxy(factory: (TransactionId,
         job.exec.pull,
         job.memoryLimit,
         poolConfig.cpuShare(job.memoryLimit),
-        poolConfig.cpuLimit(job.memoryLimit),
         None)
         .map(container =>
           PreWarmCompleted(PreWarmedData(container, job.exec.kind, job.memoryLimit, expires = job.ttl.map(_.fromNow))))
@@ -309,7 +307,6 @@ class ContainerProxy(factory: (TransactionId,
         job.action.exec.pull,
         job.action.limits.memory.megabytes.MB,
         poolConfig.cpuShare(job.action.limits.memory.megabytes.MB),
-        poolConfig.cpuLimit(job.action.limits.memory.megabytes.MB),
         Some(job.action))
 
       // container factory will either yield a new container ready to execute the action, or
@@ -833,8 +830,6 @@ class ContainerProxy(factory: (TransactionId,
             env.toJson.asJsObject,
             actionTimeout,
             job.action.limits.concurrency.maxConcurrent,
-            job.msg.user.limits.allowedMaxPayloadSize,
-            job.msg.user.limits.allowedTruncationSize,
             reschedule)(job.msg.transid)
           .map {
             case (runInterval, response) =>
@@ -966,9 +961,7 @@ class ContainerProxy(factory: (TransactionId,
   }
 }
 
-final case class ContainerProxyTimeoutConfig(idleContainer: FiniteDuration,
-                                             pauseGrace: FiniteDuration,
-                                             keepingDuration: FiniteDuration)
+final case class ContainerProxyTimeoutConfig(idleContainer: FiniteDuration, pauseGrace: FiniteDuration)
 final case class ContainerProxyHealthCheckConfig(enabled: Boolean, checkPeriod: FiniteDuration, maxFails: Int)
 final case class ContainerProxyActivationErrorLogConfig(applicationErrors: Boolean,
                                                         developerErrors: Boolean,
@@ -981,7 +974,6 @@ object ContainerProxy {
                       Boolean,
                       ByteSize,
                       Int,
-                      Option[Double],
                       Option[ExecutableWhiskAction]) => Future[Container],
             ack: ActiveAck,
             store: (TransactionId, WhiskActivation, Boolean, UserContext) => Future[Any],
@@ -1088,28 +1080,25 @@ object ContainerProxy {
    * @param initArgs set of parameters to treat as initialization arguments
    * @return A partition of the arguments into an environment variables map and the JsObject argument to the action
    */
-  def partitionArguments(content: Option[JsValue], initArgs: Set[String]): (Map[String, JsValue], JsValue) = {
+  def partitionArguments(content: Option[JsObject], initArgs: Set[String]): (Map[String, JsValue], JsObject) = {
     content match {
-      case None                                       => (Map.empty, JsObject.empty)
-      case Some(JsArray(elements))                    => (Map.empty, JsArray(elements))
-      case Some(JsObject(fields)) if initArgs.isEmpty => (Map.empty, JsObject(fields))
-      case Some(JsObject(fields)) =>
-        val (env, args) = fields.partition(k => initArgs.contains(k._1))
+      case None                         => (Map.empty, JsObject.empty)
+      case Some(js) if initArgs.isEmpty => (Map.empty, js)
+      case Some(js) =>
+        val (env, args) = js.fields.partition(k => initArgs.contains(k._1))
         (env, JsObject(args))
     }
   }
 
-  def unlockArguments(content: Option[JsValue],
+  def unlockArguments(content: Option[JsObject],
                       lockedArgs: Map[String, String],
-                      decoder: ParameterEncryption): Option[JsValue] = {
-    content match {
-      case Some(JsObject(fields)) =>
-        Some(JsObject(fields.map {
+                      decoder: ParameterEncryption): Option[JsObject] = {
+    content.map {
+      case JsObject(fields) =>
+        JsObject(fields.map {
           case (k, v: JsString) if lockedArgs.contains(k) => (k -> decoder.encryptor(lockedArgs(k)).decrypt(v))
           case p                                          => p
-        }))
-      // keep the original for other type(e.g. JsArray)
-      case contentValue => contentValue
+        })
     }
   }
 }

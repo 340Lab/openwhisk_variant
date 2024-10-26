@@ -17,19 +17,24 @@
 
 package org.apache.openwhisk.core.containerpool.v2.test
 
+import java.net.InetSocketAddress
+import java.time.Instant
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+
 import akka.actor.FSM.{CurrentState, StateTimeout, SubscribeTransitionCallBack, Transition}
 import akka.actor.{Actor, ActorRef, ActorRefFactory, ActorSystem, Props}
 import akka.http.scaladsl.model
 import akka.io.Tcp.Connect
 import akka.stream.scaladsl.{Sink, Source}
-import akka.testkit.{ImplicitSender, TestFSMRef, TestKit, TestProbe}
+import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import akka.util.ByteString
 import com.ibm.etcd.api.{DeleteRangeResponse, KeyValue, PutResponse}
 import com.ibm.etcd.client.{EtcdClient => Client}
 import common.{LoggedFunction, StreamLogging, SynchronizedLoggedFunction}
-import org.apache.openwhisk.common.{GracefulShutdown, Logging, TransactionId}
+import org.apache.openwhisk.common.{Logging, TransactionId}
 import org.apache.openwhisk.core.ack.ActiveAck
-import org.apache.openwhisk.core.connector.{AcknowledgementMessage, ActivationMessage}
+import org.apache.openwhisk.core.connector.{AcknowledegmentMessage, ActivationMessage}
 import org.apache.openwhisk.core.containerpool.logging.LogCollectingException
 import org.apache.openwhisk.core.containerpool.v2._
 import org.apache.openwhisk.core.containerpool.{
@@ -44,9 +49,9 @@ import org.apache.openwhisk.core.containerpool.{
 }
 import org.apache.openwhisk.core.database.{ArtifactStore, StaleParameter, UserContext}
 import org.apache.openwhisk.core.entity.ExecManifest.{ImageName, RuntimeManifest}
-import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.entity.types.AuthStore
+import org.apache.openwhisk.core.entity.{ExecutableWhiskAction, _}
 import org.apache.openwhisk.core.etcd.EtcdClient
 import org.apache.openwhisk.core.etcd.EtcdKV.ContainerKeys
 import org.apache.openwhisk.core.etcd.EtcdType._
@@ -60,10 +65,6 @@ import org.scalatest.{Assertion, BeforeAndAfterAll, FlatSpecLike, Matchers}
 import spray.json.DefaultJsonProtocol._
 import spray.json.{JsObject, _}
 
-import java.net.InetSocketAddress
-import java.time.Instant
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable
 import scala.collection.mutable.{Map => MutableMap}
 import scala.concurrent.duration._
@@ -114,10 +115,9 @@ class FunctionPullingContainerProxyTests
       100,
       3,
       false,
-      1.second,
-      10)
+      1.second)
 
-  val timeoutConfig = ContainerProxyTimeoutConfig(5.seconds, 5.seconds, 5.seconds)
+  val timeoutConfig = ContainerProxyTimeoutConfig(5.seconds, 5.seconds)
 
   val messageTransId = TransactionId(TransactionId.testing.meta.id)
 
@@ -209,26 +209,19 @@ class FunctionPullingContainerProxyTests
 
   /** get WhiskAction*/
   def getWhiskAction(response: Future[WhiskAction]) = LoggedFunction {
-    (_: ArtifactStore[WhiskEntity], _: DocId, _: DocRevision, _: Boolean, _: Boolean) =>
+    (_: ArtifactStore[WhiskEntity], _: DocId, _: DocRevision, _: Boolean) =>
       response
   }
 
   /** Creates an inspectable factory */
   def createFactory(response: Future[Container]) = LoggedFunction {
-    (_: TransactionId,
-     _: String,
-     _: ImageName,
-     _: Boolean,
-     _: ByteSize,
-     _: Int,
-     _: Option[Double],
-     _: Option[ExecutableWhiskAction]) =>
+    (_: TransactionId, _: String, _: ImageName, _: Boolean, _: ByteSize, _: Int, _: Option[ExecutableWhiskAction]) =>
       response
   }
 
   trait LoggedAcker extends ActiveAck {
     def calls =
-      mutable.Buffer[(TransactionId, WhiskActivation, Boolean, ControllerInstanceId, UUID, AcknowledgementMessage)]()
+      mutable.Buffer[(TransactionId, WhiskActivation, Boolean, ControllerInstanceId, UUID, AcknowledegmentMessage)]()
 
     def verifyAnnotations(activation: WhiskActivation, a: ExecutableWhiskAction) = {
       activation.annotations.get("limits") shouldBe Some(a.limits.toJson)
@@ -240,7 +233,7 @@ class FunctionPullingContainerProxyTests
   /** Creates an inspectable version of the ack method, which records all calls in a buffer */
   def createAcker(a: ExecutableWhiskAction = action) = new LoggedAcker {
     val acker = LoggedFunction {
-      (_: TransactionId, _: WhiskActivation, _: Boolean, _: ControllerInstanceId, _: UUID, _: AcknowledgementMessage) =>
+      (_: TransactionId, _: WhiskActivation, _: Boolean, _: ControllerInstanceId, _: UUID, _: AcknowledegmentMessage) =>
         Future.successful(())
     }
 
@@ -251,9 +244,9 @@ class FunctionPullingContainerProxyTests
                        blockingInvoke: Boolean,
                        controllerInstance: ControllerInstanceId,
                        userId: UUID,
-                       acknowledgement: AcknowledgementMessage): Future[Any] = {
+                       acknowledegment: AcknowledegmentMessage): Future[Any] = {
       verifyAnnotations(activation, a)
-      acker(tid, activation, blockingInvoke, controllerInstance, userId, acknowledgement)
+      acker(tid, activation, blockingInvoke, controllerInstance, userId, acknowledegment)
     }
   }
 
@@ -261,7 +254,7 @@ class FunctionPullingContainerProxyTests
   def createAckerForNamespaceBlacklist(a: ExecutableWhiskAction = action,
                                        mockNamespaceBlacklist: MockNamespaceBlacklist) = new LoggedAcker {
     val acker = SynchronizedLoggedFunction {
-      (_: TransactionId, _: WhiskActivation, _: Boolean, _: ControllerInstanceId, _: UUID, _: AcknowledgementMessage) =>
+      (_: TransactionId, _: WhiskActivation, _: Boolean, _: ControllerInstanceId, _: UUID, _: AcknowledegmentMessage) =>
         Future.successful(())
     }
 
@@ -276,9 +269,9 @@ class FunctionPullingContainerProxyTests
                        blockingInvoke: Boolean,
                        controllerInstance: ControllerInstanceId,
                        userId: UUID,
-                       acknowledgement: AcknowledgementMessage): Future[Any] = {
+                       acknowledegment: AcknowledegmentMessage): Future[Any] = {
       verifyAnnotations(activation, a)
-      acker(tid, activation, blockingInvoke, controllerInstance, userId, acknowledgement)
+      acker(tid, activation, blockingInvoke, controllerInstance, userId, acknowledegment)
     }
   }
 
@@ -295,23 +288,6 @@ class FunctionPullingContainerProxyTests
 
   def getLiveContainerCount(count: Long) = LoggedFunction { (_: String, _: FullyQualifiedEntityName, _: DocRevision) =>
     Future.successful(count)
-  }
-
-  def getLiveContainerCountFail(count: Long) = LoggedFunction {
-    (_: String, _: FullyQualifiedEntityName, _: DocRevision) =>
-      Future.failed(new Exception("failure"))
-  }
-
-  def getLiveContainerCountFailFirstCall(count: Long) = {
-    var firstCall = true
-    LoggedFunction { (_: String, _: FullyQualifiedEntityName, _: DocRevision) =>
-      if (firstCall) {
-        firstCall = false
-        Future.failed(new Exception("failure"))
-      } else {
-        Future.successful(count)
-      }
-    }
   }
 
   def getWarmedContainerLimit(limit: Future[(Int, FiniteDuration)]) = LoggedFunction { (_: String) =>
@@ -403,7 +379,7 @@ class FunctionPullingContainerProxyTests
     preWarm(machine, probe)
 
     factory.calls should have size 1
-    val (tid, name, _, _, memory, _, _, _) = factory.calls(0)
+    val (tid, name, _, _, memory, _, _) = factory.calls(0)
     tid shouldBe TransactionId.invokerWarmup
     name should fullyMatch regex """wskmyname\d+_\d+_prewarm_actionKind"""
     memory shouldBe memoryLimit
@@ -448,10 +424,10 @@ class FunctionPullingContainerProxyTests
     registerCallback(machine, probe)
     preWarm(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, transid)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, transid)
     probe.expectMsg(Transition(machine, ContainerCreated, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -513,10 +489,10 @@ class FunctionPullingContainerProxyTests
     registerCallback(machine, probe)
     preWarm(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, ContainerCreated, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -577,10 +553,10 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -593,7 +569,7 @@ class FunctionPullingContainerProxyTests
       case RequestActivation(Some(_), None) => true
     }
 
-    val (tid, name, _, _, memory, _, _, _) = factory.calls(0)
+    val (tid, name, _, _, memory, _, _) = factory.calls(0)
     tid shouldBe TransactionId.invokerColdstart
     name should fullyMatch regex """wskmyname\d+_\d+_actionSpace_actionName"""
     memory shouldBe memoryLimit
@@ -646,10 +622,10 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -673,7 +649,7 @@ class FunctionPullingContainerProxyTests
     }
   }
 
-  it should "not run activations and destroy the prewarm container when get client failed" in within(timeout) {
+  it should "not run activations and destory the prewarm container when get client failed" in within(timeout) {
     val authStore = mock[ArtifactWhiskAuthStore]
     val namespaceBlacklist: NamespaceBlacklist = new NamespaceBlacklist(authStore)
     val get = getWhiskAction(Future(action.toWhiskAction))
@@ -719,7 +695,7 @@ class FunctionPullingContainerProxyTests
     registerCallback(machine, probe)
     preWarm(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, ContainerCreated, CreatingClient))
     probe.expectMsg(ContainerRemoved(true))
 
@@ -780,7 +756,7 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     probe.expectMsg(ContainerRemoved(true))
 
@@ -832,7 +808,7 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
     client.send(machine, ClientClosed)
@@ -887,10 +863,10 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -947,10 +923,10 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -1019,10 +995,10 @@ class FunctionPullingContainerProxyTests
     registerCallback(machine, probe)
     probe watch machine
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -1043,177 +1019,6 @@ class FunctionPullingContainerProxyTests
 
     machine ! StateTimeout
     client.expectMsg(StopClientProxy)
-    probe.expectMsgAllOf(ContainerRemoved(true), Transition(machine, Paused, Removing))
-    client.send(machine, ClientClosed)
-
-    probe expectTerminated machine
-
-    awaitAssert {
-      factory.calls should have size 1
-      container.initializeCount shouldBe 1
-      container.runCount shouldBe 1
-      collector.calls.length shouldBe 1
-      container.destroyCount shouldBe 1
-      acker.calls.length shouldBe 1
-      store.calls.length shouldBe 1
-    }
-  }
-
-  it should "destroy container proxy when stopping due to timeout and getting live count fails once" in within(timeout) {
-    val authStore = mock[ArtifactWhiskAuthStore]
-    val namespaceBlacklist: NamespaceBlacklist = new NamespaceBlacklist(authStore)
-    val get = getWhiskAction(Future(action.toWhiskAction))
-    val dataManagementService = TestProbe()
-    val container = new TestContainer
-    val factory = createFactory(Future.successful(container))
-    val acker = createAcker()
-    val store = createStore
-    val collector = createCollector()
-    val counter = getLiveContainerCountFailFirstCall(2)
-    val limit = getWarmedContainerLimit(Future.successful((1, 10.seconds)))
-    val (client, clientFactory) = testClient
-
-    val probe = TestProbe()
-    val machine =
-      probe.childActorOf(
-        FunctionPullingContainerProxy
-          .props(
-            factory,
-            entityStore,
-            namespaceBlacklist,
-            get,
-            dataManagementService.ref,
-            clientFactory,
-            acker,
-            store,
-            collector,
-            counter,
-            limit,
-            InvokerInstanceId(0, userMemory = defaultUserMemory),
-            invokerHealthManager.ref,
-            poolConfig,
-            timeoutConfig))
-
-    registerCallback(machine, probe)
-    probe watch machine
-
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
-
-    probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
-    client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
-
-    probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
-    expectInitialized(probe)
-    //register running container
-    dataManagementService.expectMsgType[RegisterData]
-
-    client.expectMsg(RequestActivation())
-    client.send(machine, message)
-
-    probe.expectMsg(Transition(machine, ClientCreated, Running))
-    client.expectMsg(ContainerWarmed)
-    client.expectMsgPF() {
-      case RequestActivation(Some(_), None) => true
-    }
-
-    machine ! StateTimeout
-    client.send(machine, RetryRequestActivation)
-    probe.expectMsg(Transition(machine, Running, Pausing))
-    probe.expectMsgType[ContainerIsPaused]
-    probe.expectMsg(Transition(machine, Pausing, Paused))
-    //register paused warmed container
-    dataManagementService.expectMsgType[RegisterData]
-
-    machine ! StateTimeout
-    client.expectMsg(StopClientProxy)
-    dataManagementService.expectMsgType[UnregisterData]
-    probe.expectMsgAllOf(ContainerRemoved(true), Transition(machine, Paused, Removing))
-    client.send(machine, ClientClosed)
-
-    probe expectTerminated machine
-
-    awaitAssert {
-      factory.calls should have size 1
-      container.initializeCount shouldBe 1
-      container.runCount shouldBe 1
-      collector.calls.length shouldBe 1
-      container.destroyCount shouldBe 1
-      acker.calls.length shouldBe 1
-      store.calls.length shouldBe 1
-    }
-  }
-
-  it should "destroy container proxy when stopping due to timeout and getting live count fails permanently" in within(
-    timeout) {
-    val authStore = mock[ArtifactWhiskAuthStore]
-    val namespaceBlacklist: NamespaceBlacklist = new NamespaceBlacklist(authStore)
-    val get = getWhiskAction(Future(action.toWhiskAction))
-    val dataManagementService = TestProbe()
-    val container = new TestContainer
-    val factory = createFactory(Future.successful(container))
-    val acker = createAcker()
-    val store = createStore
-    val collector = createCollector()
-    val counter = getLiveContainerCountFail(2)
-    val limit = getWarmedContainerLimit(Future.successful((1, 10.seconds)))
-    val (client, clientFactory) = testClient
-
-    val probe = TestProbe()
-    val machine =
-      probe.childActorOf(
-        FunctionPullingContainerProxy
-          .props(
-            factory,
-            entityStore,
-            namespaceBlacklist,
-            get,
-            dataManagementService.ref,
-            clientFactory,
-            acker,
-            store,
-            collector,
-            counter,
-            limit,
-            InvokerInstanceId(0, userMemory = defaultUserMemory),
-            invokerHealthManager.ref,
-            poolConfig,
-            timeoutConfig))
-
-    registerCallback(machine, probe)
-    probe watch machine
-
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
-
-    probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
-    client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
-
-    probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
-    expectInitialized(probe)
-    //register running container
-    dataManagementService.expectMsgType[RegisterData]
-
-    client.expectMsg(RequestActivation())
-    client.send(machine, message)
-
-    probe.expectMsg(Transition(machine, ClientCreated, Running))
-    client.expectMsg(ContainerWarmed)
-    client.expectMsgPF() {
-      case RequestActivation(Some(_), None) => true
-    }
-
-    machine ! StateTimeout
-    client.send(machine, RetryRequestActivation)
-    probe.expectMsg(Transition(machine, Running, Pausing))
-    probe.expectMsgType[ContainerIsPaused]
-    probe.expectMsg(Transition(machine, Pausing, Paused))
-    //register paused warmed container
-    dataManagementService.expectMsgType[RegisterData]
-
-    machine ! StateTimeout
-    client.expectMsg(StopClientProxy)
-    dataManagementService.expectMsgType[UnregisterData]
     probe.expectMsgAllOf(ContainerRemoved(true), Transition(machine, Paused, Removing))
     client.send(machine, ClientClosed)
 
@@ -1269,10 +1074,10 @@ class FunctionPullingContainerProxyTests
     registerCallback(machine, probe)
     probe watch machine
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -1346,10 +1151,10 @@ class FunctionPullingContainerProxyTests
     registerCallback(machine, probe)
     probe watch machine
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -1427,10 +1232,10 @@ class FunctionPullingContainerProxyTests
     registerCallback(machine, probe)
     probe watch machine
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -1504,10 +1309,10 @@ class FunctionPullingContainerProxyTests
     registerCallback(machine, probe)
     probe watch machine
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -1540,100 +1345,6 @@ class FunctionPullingContainerProxyTests
     }
   }
 
-  it should "remove the ETCD data first when disabling the container proxy" in within(timeout) {
-    val authStore = mock[ArtifactWhiskAuthStore]
-    val namespaceBlacklist: NamespaceBlacklist = new NamespaceBlacklist(authStore)
-    val get = getWhiskAction(Future(action.toWhiskAction))
-    val dataManagementService = TestProbe()
-    val container = new TestContainer
-    val factory = createFactory(Future.successful(container))
-    val acker = createAcker()
-    val store = createStore
-    val collector = createCollector()
-    val counter = getLiveContainerCount(1)
-    val limit = getWarmedContainerLimit(Future.successful((1, 10.seconds)))
-    val (client, clientFactory) = testClient
-
-    val instanceId = InvokerInstanceId(0, userMemory = defaultUserMemory)
-    val probe = TestProbe()
-    val machine =
-      TestFSMRef(
-        new FunctionPullingContainerProxy(
-          factory,
-          entityStore,
-          namespaceBlacklist,
-          get,
-          dataManagementService.ref,
-          clientFactory,
-          acker,
-          store,
-          collector,
-          counter,
-          limit,
-          instanceId,
-          invokerHealthManager.ref,
-          poolConfig,
-          timeoutConfig,
-          healthchecksConfig(),
-          None),
-        probe.ref)
-
-    registerCallback(machine, probe)
-
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
-    probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
-    client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
-
-    awaitAssert {
-      machine.underlyingActor.stateData.getContainer should not be None
-    }
-
-    val containerId = machine.underlyingActor.stateData.getContainer match {
-      case Some(container) => container.containerId
-      case None            => ContainerId("")
-    }
-
-    dataManagementService.expectMsg(RegisterData(
-      s"${ContainerKeys.existingContainers(invocationNamespace.asString, fqn, action.rev, Some(instanceId), Some(containerId))}",
-      ""))
-
-    probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
-    expectInitialized(probe)
-    client.expectMsg(RequestActivation())
-    client.send(machine, message)
-
-    probe.expectMsg(Transition(machine, ClientCreated, Running))
-    client.expectMsg(ContainerWarmed)
-    client.expectMsgPF() {
-      case RequestActivation(Some(_), None) => true
-    }
-    client.send(machine, message)
-    client.expectMsgPF() {
-      case RequestActivation(Some(_), None) => true
-    }
-    machine ! GracefulShutdown
-
-    dataManagementService.expectMsg(
-      UnregisterData(ContainerKeys
-        .existingContainers(invocationNamespace.asString, fqn, action.rev, Some(instanceId), Some(containerId))))
-
-    client.expectMsg(GracefulShutdown)
-    client.send(machine, ClientClosed)
-
-    probe.expectMsgAllOf(ContainerRemoved(true), Transition(machine, Running, Removing))
-
-    awaitAssert {
-      factory.calls should have size 1
-      container.initializeCount shouldBe 1
-      container.runCount shouldBe 2
-      collector.calls.length shouldBe 2
-      container.destroyCount shouldBe 1
-      acker.calls.length shouldBe 2
-      store.calls.length shouldBe 2
-    }
-  }
-
   it should "pause itself when timeout and recover when got a new Initialize" in within(timeout) {
     val authStore = mock[ArtifactWhiskAuthStore]
     val namespaceBlacklist: NamespaceBlacklist = new NamespaceBlacklist(authStore)
@@ -1649,10 +1360,9 @@ class FunctionPullingContainerProxyTests
     val (client, clientFactory) = testClient
     val instanceId = InvokerInstanceId(0, userMemory = defaultUserMemory)
 
-    val pool = TestProbe()
     val probe = TestProbe()
     val machine =
-      pool.childActorOf(
+      probe.childActorOf(
         FunctionPullingContainerProxy
           .props(
             factory,
@@ -1674,10 +1384,10 @@ class FunctionPullingContainerProxyTests
     registerCallback(machine, probe)
     probe watch machine
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
     dataManagementService.expectMsg(
       RegisterData(
         ContainerKeys.existingContainers(
@@ -1689,7 +1399,7 @@ class FunctionPullingContainerProxyTests
         ""))
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
-    expectInitialized(pool)
+    expectInitialized(probe)
     client.expectMsg(RequestActivation())
     client.send(machine, message)
 
@@ -1702,7 +1412,7 @@ class FunctionPullingContainerProxyTests
     machine ! StateTimeout
     client.send(machine, RetryRequestActivation)
     probe.expectMsg(Transition(machine, Running, Pausing))
-    pool.expectMsgType[ContainerIsPaused]
+    probe.expectMsgType[ContainerIsPaused]
     dataManagementService.expectMsgAllOf(
       RegisterData(
         ContainerKeys
@@ -1717,7 +1427,7 @@ class FunctionPullingContainerProxyTests
           Some(testContainerId))))
     probe.expectMsg(Transition(machine, Pausing, Paused))
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     dataManagementService.expectMsgAllOf(
       UnregisterData(
         ContainerKeys
@@ -1730,9 +1440,10 @@ class FunctionPullingContainerProxyTests
           Some(instanceId),
           Some(testContainerId)),
         ""))
-
-    probe.expectMsg(Transition(machine, Paused, Running))
-    pool.expectMsgType[Resumed]
+    inAnyOrder {
+      probe.expectMsg(Transition(machine, Paused, Running))
+      probe.expectMsgType[Resumed]
+    }
 
     awaitAssert {
       factory.calls should have size 1
@@ -1783,10 +1494,10 @@ class FunctionPullingContainerProxyTests
             timeoutConfig))
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, noLogsAction, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, noLogsAction, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -1851,7 +1562,7 @@ class FunctionPullingContainerProxyTests
             timeoutConfig))
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsgAllOf(
       Transition(machine, Uninitialized, CreatingClient),
       ContainerCreationFailed(exception),
@@ -1914,10 +1625,10 @@ class FunctionPullingContainerProxyTests
     registerCallback(machine, probe)
     preWarm(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, ContainerCreated, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -1988,10 +1699,10 @@ class FunctionPullingContainerProxyTests
             timeoutConfig))
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2025,12 +1736,10 @@ class FunctionPullingContainerProxyTests
     val dataManagementService = TestProbe()
 
     val container = new TestContainer {
-      override def run(parameters: JsValue,
+      override def run(parameters: JsObject,
                        environment: JsObject,
                        timeout: FiniteDuration,
                        concurrent: Int,
-                       maxResponse: ByteSize,
-                       truncation: ByteSize,
                        reschedule: Boolean)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
         atomicRunCount.incrementAndGet()
         Future.successful((initInterval, ActivationResponse.developerError(("boom"))))
@@ -2067,10 +1776,10 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2100,12 +1809,10 @@ class FunctionPullingContainerProxyTests
     val dataManagementService = TestProbe()
 
     val container = new TestContainer {
-      override def run(parameters: JsValue,
+      override def run(parameters: JsObject,
                        environment: JsObject,
                        timeout: FiniteDuration,
                        concurrent: Int,
-                       maxResponse: ByteSize,
-                       truncation: ByteSize,
                        reschedule: Boolean)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
         atomicRunCount.incrementAndGet()
         //every other run fails
@@ -2148,10 +1855,10 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2238,10 +1945,10 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2301,10 +2008,10 @@ class FunctionPullingContainerProxyTests
             timeoutConfig))
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2367,10 +2074,10 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2437,10 +2144,10 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2520,10 +2227,10 @@ class FunctionPullingContainerProxyTests
 
     registerCallback(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, Uninitialized, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2597,10 +2304,10 @@ class FunctionPullingContainerProxyTests
     mockNamespaceBlacklist.refreshBlacklist()
     //the namespace:invocationSpace will be added to namespaceBlackboxlist
     mockNamespaceBlacklist.refreshBlacklist()
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, ContainerCreated, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2664,10 +2371,10 @@ class FunctionPullingContainerProxyTests
 
     //first refresh, the namespace:invocationSpace is not in namespaceBlacklist, so activations are executed successfully
     mockNamespaceBlacklist.refreshBlacklist()
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, ContainerCreated, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2710,15 +2417,13 @@ class FunctionPullingContainerProxyTests
     val dataManagementService = TestProbe()
 
     val container = new TestContainer {
-      override def run(parameters: JsValue,
+      override def run(parameters: JsObject,
                        environment: JsObject,
                        timeout: FiniteDuration,
                        concurrent: Int,
-                       maxResponse: ByteSize,
-                       truncation: ByteSize,
                        reschedule: Boolean)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
         Thread.sleep((timeoutConfig.pauseGrace + 1.second).toMillis) // 6 sec actions
-        super.run(parameters, environment, timeout, concurrent, maxResponse, truncation)
+        super.run(parameters, environment, timeout, concurrent)
       }
     }
     val factory = createFactory(Future.successful(container))
@@ -2752,10 +2457,10 @@ class FunctionPullingContainerProxyTests
     registerCallback(machine, probe)
     preWarm(machine, probe)
 
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, ContainerCreated, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2832,10 +2537,10 @@ class FunctionPullingContainerProxyTests
     tcpProbe.expectMsg(Connect(new InetSocketAddress("0.0.0.0", 12345)))
 
     //pings should repeat till the container goes into Running state
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, transid)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, transid)
     probe.expectMsg(Transition(machine, ContainerCreated, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2900,13 +2605,10 @@ class FunctionPullingContainerProxyTests
     // throw health error
     initPromise.failure(ContainerHealthError(messageTransId, "intentional failure"))
 
-    val fqn = action.fullyQualifiedName(withVersion = true)
-    val rev = action.rev
-
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, ContainerCreated, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2914,6 +2616,8 @@ class FunctionPullingContainerProxyTests
     client.send(machine, message)
 
     // message should be rescheduled
+    val fqn = action.fullyQualifiedName(withVersion = true)
+    val rev = action.rev
     client.expectMsg(RescheduleActivation(invocationNamespace.asString, fqn, rev, message))
   }
 
@@ -2962,13 +2666,10 @@ class FunctionPullingContainerProxyTests
     // throw health error
     runPromises.head.failure(ContainerHealthError(messageTransId, "intentional failure"))
 
-    val fqn = action.fullyQualifiedName(withVersion = true)
-    val rev = action.rev
-
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, ContainerCreated, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -2976,6 +2677,8 @@ class FunctionPullingContainerProxyTests
     client.send(machine, message)
 
     // message should be rescheduled
+    val fqn = action.fullyQualifiedName(withVersion = true)
+    val rev = action.rev
     client.expectMsg(ContainerWarmed)
     client.expectMsg(RescheduleActivation(invocationNamespace.asString, fqn, rev, message))
   }
@@ -3028,13 +2731,10 @@ class FunctionPullingContainerProxyTests
     // throw health error
     runPromises(1).failure(ContainerHealthError(messageTransId, "intentional failure"))
 
-    val fqn = action.fullyQualifiedName(withVersion = true)
-    val rev = action.rev
-
-    machine ! Initialize(invocationNamespace.asString, fqn, action, schedulerHost, rpcPort, messageTransId)
+    machine ! Initialize(invocationNamespace.asString, action, schedulerHost, rpcPort, messageTransId)
     probe.expectMsg(Transition(machine, ContainerCreated, CreatingClient))
     client.expectMsg(StartClient)
-    client.send(machine, ClientCreationCompleted)
+    client.send(machine, ClientCreationCompleted())
 
     probe.expectMsg(Transition(machine, CreatingClient, ClientCreated))
     expectInitialized(probe)
@@ -3050,6 +2750,8 @@ class FunctionPullingContainerProxyTests
     client.send(machine, message)
 
     // message should be rescheduled
+    val fqn = action.fullyQualifiedName(withVersion = true)
+    val rev = action.rev
     client.expectMsg(RescheduleActivation(invocationNamespace.asString, fqn, rev, message))
   }
 
@@ -3110,12 +2812,10 @@ class FunctionPullingContainerProxyTests
     }
 
     override def run(
-      parameters: JsValue,
+      parameters: JsObject,
       environment: JsObject,
       timeout: FiniteDuration,
       concurrent: Int,
-      maxResponse: ByteSize,
-      truncation: ByteSize,
       reschedule: Boolean = false)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
       val runCount = atomicRunCount.incrementAndGet()
       environment.fields("namespace") shouldBe invocationNamespace.name.toJson

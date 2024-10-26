@@ -21,18 +21,19 @@ import java.nio.charset.StandardCharsets
 import java.time.Instant
 
 import akka.Done
-import akka.actor.{ActorRef, ActorRefFactory, ActorSystem, CoordinatedShutdown, Props}
+import akka.actor.{ActorRefFactory, ActorSystem, CoordinatedShutdown, Props}
 import akka.event.Logging.InfoLevel
+import akka.http.scaladsl.server.Directives.complete
+import akka.http.scaladsl.server.Route
 import org.apache.openwhisk.common._
 import org.apache.openwhisk.common.tracing.WhiskTracerProvider
 import org.apache.openwhisk.core.ack.{MessagingActiveAck, UserEventSender}
 import org.apache.openwhisk.core.connector._
 import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.containerpool.logging.LogStoreProvider
-import org.apache.openwhisk.core.containerpool.v2.{NotSupportedPoolState, TotalContainerPoolState}
-import org.apache.openwhisk.core.database._
+import org.apache.openwhisk.core.database.{UserContext, _}
 import org.apache.openwhisk.core.entity._
-import org.apache.openwhisk.core.invoker.Invoker.InvokerEnabled
+import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.{ConfigKeys, WhiskConfig}
 import org.apache.openwhisk.http.Messages
 import org.apache.openwhisk.spi.SpiLoader
@@ -45,13 +46,15 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
 
 object InvokerReactive extends InvokerProvider {
+
   override def instance(
     config: WhiskConfig,
     instance: InvokerInstanceId,
     producer: MessageProducer,
     poolConfig: ContainerPoolConfig,
-    limitsConfig: IntraConcurrencyLimitConfig)(implicit actorSystem: ActorSystem, logging: Logging): InvokerCore =
+    limitsConfig: ConcurrencyLimitConfig)(implicit actorSystem: ActorSystem, logging: Logging): InvokerCore =
     new InvokerReactive(config, instance, producer, poolConfig, limitsConfig)
+
 }
 
 class InvokerReactive(
@@ -59,8 +62,9 @@ class InvokerReactive(
   instance: InvokerInstanceId,
   producer: MessageProducer,
   poolConfig: ContainerPoolConfig = loadConfigOrThrow[ContainerPoolConfig](ConfigKeys.containerPool),
-  limitsConfig: IntraConcurrencyLimitConfig = loadConfigOrThrow[IntraConcurrencyLimitConfig](
-    ConfigKeys.concurrencyLimit))(implicit actorSystem: ActorSystem, logging: Logging)
+  limitsConfig: ConcurrencyLimitConfig = loadConfigOrThrow[ConcurrencyLimitConfig](ConfigKeys.concurrencyLimit))(
+  implicit actorSystem: ActorSystem,
+  logging: Logging)
     extends InvokerCore {
 
   implicit val ec: ExecutionContext = actorSystem.dispatcher
@@ -139,7 +143,7 @@ class InvokerReactive(
   /** Stores an activation in the database. */
   private val store = (tid: TransactionId, activation: WhiskActivation, isBlocking: Boolean, context: UserContext) => {
     implicit val transid: TransactionId = tid
-    activationStore.storeAfterCheck(activation, isBlocking, None, None, context)(tid, notifier = None, logging)
+    activationStore.storeAfterCheck(activation, isBlocking, None, context)(tid, notifier = None, logging)
   }
 
   /** Creates a ContainerProxy Actor when being called. */
@@ -176,8 +180,6 @@ class InvokerReactive(
     WhiskAction
       .get(entityStore, actionid.id, actionid.rev, fromCache = actionid.rev != DocRevision.empty)
       .flatMap(action => {
-        // action that exceed the limit cannot be executed.
-        action.limits.checkLimits(msg.user)
         action.toExecutableWhiskAction match {
           case Some(executable) =>
             pool ! Run(executable, msg)
@@ -196,8 +198,6 @@ class InvokerReactive(
           val response = t match {
             case _: NoDocumentException =>
               ActivationResponse.applicationError(Messages.actionRemovedWhileInvoking)
-            case e: ActionLimitsException =>
-              ActivationResponse.applicationError(e.getMessage) // return generated failed message
             case _: DocumentTypeMismatchException | _: DocumentUnreadable =>
               ActivationResponse.whiskError(Messages.actionMismatchWhileInvoking)
             case _ =>
@@ -293,47 +293,18 @@ class InvokerReactive(
   }
 
   private val healthProducer = msgProvider.getProducer(config)
-
-  private def getHealthScheduler: ActorRef =
-    Scheduler.scheduleWaitAtMost(1.seconds)(() => pingController(isEnabled = true))
-
-  private def pingController(isEnabled: Boolean) = {
-    healthProducer.send(s"${Invoker.topicPrefix}health", PingMessage(instance, isEnabled = Some(isEnabled))).andThen {
+  Scheduler.scheduleWaitAtMost(1.seconds)(() => {
+    healthProducer.send(s"${Invoker.topicPrefix}health", PingMessage(instance)).andThen {
       case Failure(t) => logging.error(this, s"failed to ping the controller: $t")
     }
+  })
+
+  override def enable(): Route = {
+    complete("not supported")
   }
 
-  private var healthScheduler: Option[ActorRef] = Some(getHealthScheduler)
-
-  override def enable(): String = {
-    if (healthScheduler.isEmpty) {
-      healthScheduler = Some(getHealthScheduler)
-      s"${instance.toString} is now enabled."
-    } else {
-      s"${instance.toString} is already enabled."
-    }
+  override def disable(): Route = {
+    complete("not supported")
   }
 
-  override def disable(): String = {
-    pingController(isEnabled = false)
-    if (healthScheduler.nonEmpty) {
-      actorSystem.stop(healthScheduler.get)
-      healthScheduler = None
-      s"${instance.toString} is now disabled."
-    } else {
-      s"${instance.toString} is already disabled."
-    }
-  }
-
-  override def isEnabled(): String = {
-    InvokerEnabled(healthScheduler.nonEmpty).serialize()
-  }
-
-  override def backfillPrewarm(): String = {
-    "not supported"
-  }
-
-  override def getPoolState(): Future[Either[NotSupportedPoolState, TotalContainerPoolState]] = {
-    Future.successful(Left(NotSupportedPoolState()))
-  }
 }

@@ -19,6 +19,7 @@ package org.apache.openwhisk.core.containerpool.docker.test
 
 import java.io.IOException
 import java.time.Instant
+
 import akka.stream.scaladsl.{Sink, Source}
 import akka.util.ByteString
 import common.TimingHelpers
@@ -41,7 +42,7 @@ import org.apache.openwhisk.common.LogMarker
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.containerpool.docker._
-import org.apache.openwhisk.core.entity.{ActivationResponse, ByteSize}
+import org.apache.openwhisk.core.entity.ActivationResponse
 import org.apache.openwhisk.core.entity.ActivationResponse.ContainerResponse
 import org.apache.openwhisk.core.entity.ActivationResponse.Timeout
 import org.apache.openwhisk.core.entity.size._
@@ -108,8 +109,6 @@ class DockerContainerTests
         body: JsObject,
         timeout: FiniteDuration,
         concurrent: Int,
-        maxResponse: ByteSize,
-        truncation: ByteSize,
         retry: Boolean = false,
         reschedule: Boolean = false)(implicit transid: TransactionId): Future[RunResult] = {
         ccRes
@@ -137,7 +136,6 @@ class DockerContainerTests
     val image = "image"
     val memory = 128.MB
     val cpuShares = 1
-    val cpuLimit = 0.5
     val environment = Map("test" -> "hi")
     val network = "testwork"
     val name = "myContainer"
@@ -146,7 +144,6 @@ class DockerContainerTests
       image = Right(ImageName(image)),
       memory = memory,
       cpuShares = cpuShares,
-      cpuLimit = Some(cpuLimit),
       environment = environment,
       network = network,
       name = Some(name),
@@ -173,7 +170,6 @@ class DockerContainerTests
     args should contain inOrder ("--cpu-shares", cpuShares.toString)
     args should contain inOrder ("--network", network)
     args should contain inOrder ("--name", name)
-    args should contain inOrder ("--cpus", cpuLimit.toString)
 
     // Assert proper environment passing
     args should contain allOf ("-e", "test=hi")
@@ -465,7 +461,7 @@ class DockerContainerTests
       Future.successful(RunResult(interval, Right(ContainerResponse(true, result.compactPrint, None))))
     }
 
-    val runResult = container.run(JsObject.empty, JsObject.empty, 1.second, 1, 1.MB, 1.MB)
+    val runResult = container.run(JsObject.empty, JsObject.empty, 1.second, 1)
     await(runResult) shouldBe (interval, ActivationResponse.success(Some(result), Some(2)))
 
     // assert the starting log is there
@@ -476,23 +472,6 @@ class DockerContainerTests
     val end = LogMarker.parse(logLines.last)
     end.token shouldBe INVOKER_ACTIVATION_RUN.asFinish
     end.deltaToMarkerStart shouldBe Some(interval.duration.toMillis)
-  }
-
-  it should "throw ContainerHealthError if runtime container returns 503 response" in {
-    implicit val docker = stub[DockerApiWithFileAccess]
-    implicit val runc = stub[RuncApi]
-
-    val interval = intervalOf(1.millisecond)
-    val result = JsObject.empty
-    val container = dockerContainer() {
-      Future.successful(RunResult(interval, Right(ContainerResponse(503, result.compactPrint, None))))
-    }
-
-    val initResult = container.initialize(JsObject.empty, 1.second, 1)
-    an[ContainerHealthError] should be thrownBy await(initResult)
-
-    val runResult = container.run(JsObject.empty, JsObject.empty, 1.second, 1, 1.MB, 1.MB)
-    an[ContainerHealthError] should be thrownBy await(runResult)
   }
 
   it should "properly deal with a timeout during run" in {
@@ -506,7 +485,7 @@ class DockerContainerTests
       Future.successful(RunResult(interval, Left(Timeout(new Throwable()))))
     }
 
-    val runResult = container.run(JsObject.empty, JsObject.empty, runTimeout, 1, 1.MB, 1.MB)
+    val runResult = container.run(JsObject.empty, JsObject.empty, runTimeout, 1)
     await(runResult) shouldBe (interval, ActivationResponse.developerError(
       Messages.timedoutActivation(runTimeout, false)))
 

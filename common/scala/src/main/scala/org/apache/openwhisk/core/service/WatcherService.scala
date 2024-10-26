@@ -19,11 +19,10 @@ package org.apache.openwhisk.core.service
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import com.ibm.etcd.api.Event.EventType
-import com.ibm.etcd.client.kv.KvClient
-import org.apache.openwhisk.common.{GracefulShutdown, Logging}
+import com.ibm.etcd.client.kv.WatchUpdate
+import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.core.etcd.EtcdClient
 import org.apache.openwhisk.core.etcd.EtcdType._
-
 import scala.collection.JavaConverters._
 import scala.collection.concurrent.TrieMap
 
@@ -34,8 +33,6 @@ case class WatchEndpoint(key: String,
                          name: String,
                          listenEvents: Set[EtcdEvent] = Set.empty)
 case class UnwatchEndpoint(watchKey: String, isPrefix: Boolean, watchName: String, needFeedback: Boolean = false)
-
-case object RestartWatcher
 
 // the watchKey is the string user want to watch, it can be a prefix, the key is a record's key in Etcd
 // so if `isPrefix = true`, the `watchKey != key`, else the `watchKey == key`
@@ -72,58 +69,49 @@ class WatcherService(etcdClient: EtcdClient)(implicit logging: Logging, actorSys
   private[service] val prefixPutWatchers = TrieMap[WatcherKey, ActorRef]()
   private[service] val prefixDeleteWatchers = TrieMap[WatcherKey, ActorRef]()
 
-  private def startWatch(): KvClient.Watch = {
-    etcdClient.watchAllKeys(
-      res =>
-        res.getEvents.asScala.foreach { event =>
-          event.getType match {
-            case EventType.DELETE =>
-              val key = ByteStringToString(event.getPrevKv.getKey)
-              val value = ByteStringToString(event.getPrevKv.getValue)
-              val watchEvent = WatchEndpointRemoved(key, key, value, false)
-              deleteWatchers
-                .foreach { watcher =>
-                  if (watcher._1.watchKey == key) {
-                    watcher._2 ! watchEvent
-                  }
-                }
-              prefixDeleteWatchers
-                .foreach { watcher =>
-                  if (key.startsWith(watcher._1.watchKey)) {
-                    watcher._2 ! WatchEndpointRemoved(watcher._1.watchKey, key, value, true)
-                  }
-                }
-            case EventType.PUT =>
-              val key = ByteStringToString(event.getKv.getKey)
-              val value = ByteStringToString(event.getKv.getValue)
-              val watchEvent = WatchEndpointInserted(key, key, value, false)
-              putWatchers
-                .foreach { watcher =>
-                  if (watcher._1.watchKey == key) {
-                    watcher._2 ! watchEvent
-                  }
-                }
-              prefixPutWatchers
-                .foreach { watcher =>
-                  if (key.startsWith(watcher._1.watchKey)) {
-                    watcher._2 ! WatchEndpointInserted(watcher._1.watchKey, key, value, true)
-                  }
-                }
-            case msg =>
-              logging.debug(this, s"watch event received: $msg.")
-          }
-      },
-      error => {
-        logging.error(this, s"encountered error, restarting watcher service: $error")
-        self ! RestartWatcher
-      },
-      () => {
-        logging.warn(this, s"watch stream completed, restarting watcher service")
-        self ! RestartWatcher
-      })
+  private val watcher = etcdClient.watchAllKeys { res: WatchUpdate =>
+    res.getEvents.asScala.foreach { event =>
+      event.getType match {
+        case EventType.DELETE =>
+          val key = ByteStringToString(event.getPrevKv.getKey)
+          val value = ByteStringToString(event.getPrevKv.getValue)
+          val watchEvent = WatchEndpointRemoved(key, key, value, false)
+          deleteWatchers
+            .foreach { watcher =>
+              if (watcher._1.watchKey == key) {
+                watcher._2 ! watchEvent
+              }
+            }
+          prefixDeleteWatchers
+            .foreach { watcher =>
+              if (key.startsWith(watcher._1.watchKey)) {
+                watcher._2 ! WatchEndpointRemoved(watcher._1.watchKey, key, value, true)
+              }
+            }
+        case EventType.PUT =>
+          val key = ByteStringToString(event.getKv.getKey)
+          val value = ByteStringToString(event.getKv.getValue)
+          val watchEvent = WatchEndpointInserted(key, key, value, false)
+          putWatchers
+            .foreach { watcher =>
+              if (watcher._1.watchKey == key) {
+                watcher._2 ! watchEvent
+              }
+            }
+          prefixPutWatchers
+            .foreach { watcher =>
+              if (key.startsWith(watcher._1.watchKey)) {
+                watcher._2 ! WatchEndpointInserted(watcher._1.watchKey, key, value, true)
+              }
+            }
+        case msg =>
+          logging.debug(this, s"watch event received: $msg.")
+      }
+    }
+
   }
 
-  private def watchBehavior(watcher: KvClient.Watch): Receive = {
+  override def receive: Receive = {
     case request: WatchEndpoint =>
       logging.info(this, s"watch endpoint: $request")
       val watcherKey = WatcherKey(request.key, request.name)
@@ -140,7 +128,6 @@ class WatcherService(etcdClient: EtcdClient)(implicit logging: Logging, actorSys
           deleteWatchers.update(watcherKey, sender())
 
     case request: UnwatchEndpoint =>
-      logging.info(this, s"unwatch endpoint: $request")
       val watcherKey = WatcherKey(request.watchKey, request.watchName)
       if (request.isPrefix) {
         prefixPutWatchers.remove(watcherKey)
@@ -153,22 +140,9 @@ class WatcherService(etcdClient: EtcdClient)(implicit logging: Logging, actorSys
       // always send WatcherClosed back to sender if it need a feedback
       if (request.needFeedback)
         sender ! WatcherClosed(request.watchKey, request.isPrefix)
-
-    case RestartWatcher =>
-      watcher.close()
-      context.become(watchBehavior(startWatch()))
-
-    case GracefulShutdown =>
-      watcher.close()
-      putWatchers.clear()
-      deleteWatchers.clear()
-      prefixPutWatchers.clear()
-      prefixDeleteWatchers.clear()
   }
-
-  override def receive: Receive = watchBehavior(startWatch())
-
 }
+
 object WatcherService {
   def props(etcdClient: EtcdClient)(implicit logging: Logging, actorSystem: ActorSystem): Props = {
     Props(new WatcherService(etcdClient))

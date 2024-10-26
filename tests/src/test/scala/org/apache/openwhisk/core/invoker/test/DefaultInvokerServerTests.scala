@@ -21,19 +21,14 @@ import akka.http.scaladsl.model.StatusCodes.{OK, Unauthorized}
 import akka.http.scaladsl.model.headers.BasicHttpCredentials
 import akka.http.scaladsl.server.Route
 import akka.http.scaladsl.testkit.ScalatestRouteTest
-import akka.http.scaladsl.unmarshalling.Unmarshal
 import common.StreamLogging
 import org.apache.openwhisk.common.TransactionId
-import org.apache.openwhisk.core.containerpool.v2.{NotSupportedPoolState, TotalContainerPoolState}
-import org.apache.openwhisk.core.invoker.Invoker.InvokerEnabled
 import org.apache.openwhisk.core.invoker.{DefaultInvokerServer, InvokerCore}
 import org.apache.openwhisk.http.BasicHttpService
 import org.junit.runner.RunWith
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, FlatSpec, Matchers}
 import org.scalatest.junit.JUnitRunner
-
-import scala.concurrent.Future
 
 /**
  * Tests InvokerServer API.
@@ -81,19 +76,6 @@ class DefaultInvokerServerTests
     }
   }
 
-  it should "check if invoker is enabled" in {
-    implicit val tid = transid()
-    val validCredentials = BasicHttpCredentials(systemUsername, systemPassword)
-    Get(s"/isEnabled") ~> addCredentials(validCredentials) ~> Route.seal(server.routes(tid)) ~> check {
-      status should be(OK)
-      Unmarshal(responseEntity)
-        .to[String]
-        .map(response => {
-          InvokerEnabled.parseJson(response) shouldEqual InvokerEnabled(true)
-        })
-    }
-  }
-
   it should "not enable invoker with invalid credential" in {
     implicit val tid = transid()
     val invalidCredentials = BasicHttpCredentials("invaliduser", "invalidpass")
@@ -138,27 +120,14 @@ class TestInvokerReactive extends InvokerCore with BasicHttpService {
   var enableCount = 0
   var disableCount = 0
 
-  override def enable(): String = {
+  override def enable(): Route = {
     enableCount += 1
-    s""
+    complete("")
   }
 
-  override def disable(): String = {
+  override def disable(): Route = {
     disableCount += 1
-    s""
-  }
-
-  override def isEnabled(): String = {
-    complete(InvokerEnabled(true).serialize())
-    s""
-  }
-
-  override def backfillPrewarm(): String = {
-    ""
-  }
-
-  override def getPoolState(): Future[Either[NotSupportedPoolState, TotalContainerPoolState]] = {
-    Future.successful(Left(NotSupportedPoolState()))
+    complete("")
   }
 
   def reset(): Unit = {

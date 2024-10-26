@@ -84,7 +84,7 @@ abstract class WhiskEntity protected[entity] (en: EntityName, val entityType: St
 
   /**
    * A JSON view of the entity, that should match the result returned in a list operation.
-   * This should be synchronized with the views computed in the database.
+   * This should be synchronized with the views computed in the databse.
    * Strictly used in view testing to enforce alignment.
    */
   def summaryAsJson: JsObject = {
@@ -199,10 +199,7 @@ case class LimitedWhiskEntityPut(exec: Option[Exec] = None,
                                  parameters: Option[Parameters] = None,
                                  annotations: Option[Parameters] = None) {
 
-  def isWithinSizeLimits(userLimits: UserLimits): Option[SizeError] = {
-
-    val parameterSizeLimit = userLimits.allowedMaxParameterSize
-
+  def isWithinSizeLimits: Option[SizeError] = {
     exec.flatMap { e =>
       val is = e.size
       if (is <= Exec.sizeLimit) None
@@ -212,17 +209,17 @@ case class LimitedWhiskEntityPut(exec: Option[Exec] = None,
         }
     } orElse parameters.flatMap { p =>
       val is = p.size
-      if (is <= parameterSizeLimit) None
+      if (is <= Parameters.sizeLimit) None
       else
         Some {
-          SizeError(WhiskEntity.paramsFieldName, is, parameterSizeLimit)
+          SizeError(WhiskEntity.paramsFieldName, is, Parameters.sizeLimit)
         }
     } orElse annotations.flatMap { a =>
       val is = a.size
-      if (is <= parameterSizeLimit) None
+      if (is <= Parameters.sizeLimit) None
       else
         Some {
-          SizeError(WhiskEntity.annotationsFieldName, is, parameterSizeLimit)
+          SizeError(WhiskEntity.annotationsFieldName, is, Parameters.sizeLimit)
         }
     }
   }

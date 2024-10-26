@@ -17,39 +17,35 @@
 
 package org.apache.openwhisk.core.database.elasticsearch
 
+import java.time.Instant
+import java.util.concurrent.TimeUnit
+
+import scala.language.postfixOps
 import akka.actor.ActorSystem
 import akka.event.Logging.ErrorLevel
 import akka.http.scaladsl.model._
 import akka.stream.scaladsl.Flow
-import com.google.common.base.Throwables
 import com.sksamuel.elastic4s.http.search.SearchHit
 import com.sksamuel.elastic4s.http.{ElasticClient, ElasticProperties, NoOpRequestConfigCallback}
 import com.sksamuel.elastic4s.indexes.IndexRequest
 import com.sksamuel.elastic4s.searches.queries.RangeQuery
 import com.sksamuel.elastic4s.searches.queries.matches.MatchPhrase
-import org.apache.http
 import org.apache.http.auth.{AuthScope, UsernamePasswordCredentials}
-import org.apache.http.conn.ConnectionKeepAliveStrategy
 import org.apache.http.impl.client.BasicCredentialsProvider
 import org.apache.http.impl.nio.client.HttpAsyncClientBuilder
-import org.apache.http.protocol.HttpContext
-import org.apache.openwhisk.common.{Logging, LoggingMarkers, TransactionId}
-import org.apache.openwhisk.core.ConfigKeys
-import org.apache.openwhisk.core.containerpool.logging.ElasticSearchJsonProtocol._
-import org.apache.openwhisk.core.database.StoreUtils._
-import org.apache.openwhisk.core.database._
-import org.apache.openwhisk.core.entity._
-import org.apache.openwhisk.http.Messages
-import org.elasticsearch.client.RestClientBuilder.HttpClientConfigCallback
 import pureconfig.loadConfigOrThrow
 import pureconfig.generic.auto._
 import spray.json._
+import org.apache.openwhisk.common.{Logging, LoggingMarkers, TransactionId}
+import org.apache.openwhisk.core.ConfigKeys
+import org.apache.openwhisk.core.containerpool.logging.ElasticSearchJsonProtocol._
+import org.apache.openwhisk.core.database._
+import org.apache.openwhisk.core.database.StoreUtils._
+import org.apache.openwhisk.core.entity._
+import org.apache.openwhisk.http.Messages
+import org.elasticsearch.client.RestClientBuilder.HttpClientConfigCallback
 
-import java.time.Instant
-import java.util.concurrent.TimeUnit
-import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContextExecutor, Future, Promise}
-import scala.language.postfixOps
 import scala.util.Try
 
 case class ElasticSearchActivationStoreConfig(protocol: String,
@@ -61,11 +57,11 @@ case class ElasticSearchActivationStoreConfig(protocol: String,
 class ElasticSearchActivationStore(
   httpFlow: Option[Flow[(HttpRequest, Promise[HttpResponse]), (Try[HttpResponse], Promise[HttpResponse]), Any]] = None,
   elasticSearchConfig: ElasticSearchActivationStoreConfig,
-  useBatching: Boolean = false)(implicit actorSystem: ActorSystem, override val logging: Logging)
+  useBatching: Boolean = false)(implicit actorSystem: ActorSystem, logging: Logging)
     extends ActivationStore {
 
-  import ElasticSearchActivationStore.{generateIndex, httpClientCallback}
   import com.sksamuel.elastic4s.http.ElasticDsl._
+  import ElasticSearchActivationStore.{generateIndex, httpClientCallback}
 
   private implicit val executionContextExecutor: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -78,9 +74,8 @@ class ElasticSearchActivationStore(
   private val esType = "_doc"
   private val maxOpenDbRequests = actorSystem.settings.config
     .getInt("akka.http.host-connection-pool.max-connections") / 2
-  private val maxRetry = loadConfigOrThrow[Int]("whisk.activation-store.retry-config.max-tries")
   private val batcher: Batcher[IndexRequest, Either[ArtifactStoreException, DocInfo]] =
-    new Batcher(500, maxOpenDbRequests, maxRetry)(doStore(_, _)(TransactionId.dbBatcher))
+    new Batcher(500, maxOpenDbRequests)(doStore(_)(TransactionId.dbBatcher))
 
   private val minStart = 0L
   private val maxStart = Instant.now.toEpochMilli + TimeUnit.DAYS.toMillis(365 * 100) //100 years from now
@@ -133,10 +128,10 @@ class ElasticSearchActivationStore(
         throw PutException("error on 'put'")
     }
 
-    res
+    reportFailure(res, start, failure => s"[PUT] 'activations' internal error, failure: '${failure.getMessage}'")
   }
 
-  private def doStore(ops: Seq[IndexRequest], retry: Int)(
+  private def doStore(ops: Seq[IndexRequest])(
     implicit transid: TransactionId): Future[Seq[Either[ArtifactStoreException, DocInfo]]] = {
     val count = ops.size
     val start = transid.started(this, LoggingMarkers.DATABASE_BULK_SAVE, s"'activations' saving $count documents")
@@ -147,22 +142,11 @@ class ElasticSearchActivationStore(
       .map { res =>
         if (res.status == StatusCodes.OK.intValue || res.status == StatusCodes.Created.intValue) {
           res.result.items.map { bulkRes =>
-            if (bulkRes.status == StatusCodes.OK.intValue || bulkRes.status == StatusCodes.Created.intValue) {
-              transid
-                .finished(
-                  this,
-                  start,
-                  s"[PUT] 'activations' completed document: '${bulkRes.id}', response: '${DocInfo(bulkRes.id)}'")
+            if (bulkRes.status == StatusCodes.OK.intValue || bulkRes.status == StatusCodes.Created.intValue)
               Right(DocInfo(bulkRes.id))
-            } else {
-              transid.failed(
-                this,
-                start,
-                s"'activations' failed to put documents, http status: '${bulkRes.status}'",
-                ErrorLevel)
+            else
               Left(PutException(
                 s"Unexpected error: ${bulkRes.error.map(e => s"${e.`type`}:${e.reason}").getOrElse("unknown")}, code: ${bulkRes.status} on 'bulk_put'"))
-            }
           }
         } else {
           transid.failed(
@@ -174,20 +158,7 @@ class ElasticSearchActivationStore(
         }
       }
 
-    res.recoverWith {
-      case t: ArtifactStoreException => Future.failed(t)
-      case _ if retry > 0 =>
-        transid.failed(this, start, s"store activation to ElasticSearch failed")
-        doStore(ops, retry - 1)
-      case t =>
-        transid.failed(
-          this,
-          start,
-          s"[PUT] 'activations' internal error, failure: '${t.getMessage}' [${t.getClass.getSimpleName}]\n" + Throwables
-            .getStackTraceAsString(t),
-          ErrorLevel)
-        Future.failed(t)
-    }
+    reportFailure(res, start, failure => s"[PUT] 'activations' internal error, failure: '${failure.getMessage}'")
   }
 
   override def get(activationId: ActivationId, context: UserContext)(
@@ -222,10 +193,7 @@ class ElasticSearchActivationStore(
           throw GetException("Unexpected http response code: " + res.status)
         }
       } recoverWith {
-      case _: DeserializationException =>
-        transid
-          .finished(this, start, s"[GET] 'activations' failed to get document: '$activationId'; failed to deserialize")
-        throw DocumentUnreadable(Messages.corruptedEntity)
+      case _: DeserializationException => throw DocumentUnreadable(Messages.corruptedEntity)
     }
 
     reportFailure(
@@ -388,8 +356,8 @@ class ElasticSearchActivationStore(
     restoreAnnotations(restoreResponse(hit.sourceAsString.parseJson.asJsObject)).convertTo[WhiskActivation]
   }
 
-  private def restoreAnnotations(js: JsValue): JsObject = {
-    val annotations = js.asJsObject.fields
+  private def restoreAnnotations(js: JsObject): JsObject = {
+    val annotations = js.fields
       .get("annotations")
       .map { anno =>
         Try {
@@ -399,10 +367,10 @@ class ElasticSearchActivationStore(
         }.getOrElse(JsArray.empty)
       }
       .getOrElse(JsArray.empty)
-    JsObject(js.asJsObject.fields.updated("annotations", annotations))
+    JsObject(js.fields.updated("annotations", annotations))
   }
 
-  private def restoreResponse(js: JsObject): JsValue = {
+  private def restoreResponse(js: JsObject): JsObject = {
     val response = js.fields
       .get("response")
       .map { res =>
@@ -412,10 +380,7 @@ class ElasticSearchActivationStore(
             .get("result")
             .map { r =>
               val JsString(data) = r
-              data.parseJson match {
-                case JsArray(elements) => JsArray(elements)
-                case _                 => data.parseJson.asJsObject
-              }
+              data.parseJson.asJsObject
             }
             .getOrElse(JsObject.empty)
           JsObject(temp.updated("result", result))
@@ -447,7 +412,6 @@ object ElasticSearchActivationStore {
         AuthScope.ANY,
         new UsernamePasswordCredentials(elasticSearchConfig.username, elasticSearchConfig.password))
       httpClientBuilder.setDefaultCredentialsProvider(provider)
-      httpClientBuilder.setKeepAliveStrategy(new CustomKeepAliveStrategy())
     }
   }
 
@@ -463,10 +427,4 @@ object ElasticSearchActivationStoreProvider extends ActivationStoreProvider {
     new ElasticSearchActivationStore(elasticSearchConfig = elasticSearchConfig, useBatching = true)(
       actorSystem,
       logging)
-}
-
-class CustomKeepAliveStrategy extends ConnectionKeepAliveStrategy {
-  override def getKeepAliveDuration(response: http.HttpResponse, context: HttpContext): Long = {
-    loadConfigOrThrow[FiniteDuration]("whisk.activation-store.elasticsearch.keep-alive").toMillis
-  }
 }

@@ -20,14 +20,13 @@ package org.apache.openwhisk.core.containerpool.v2
 import java.util.concurrent.atomic.AtomicInteger
 
 import akka.actor.{Actor, ActorRef, ActorRefFactory, Cancellable, Props}
+import org.apache.kafka.clients.producer.RecordMetadata
 import org.apache.openwhisk.common._
 import org.apache.openwhisk.core.connector.ContainerCreationError._
 import org.apache.openwhisk.core.connector.{
   ContainerCreationAckMessage,
   ContainerCreationMessage,
-  ContainerDeletionMessage,
-  GetState,
-  ResultMetadata
+  ContainerDeletionMessage
 }
 import org.apache.openwhisk.core.containerpool.{
   AdjustPrewarmedContainer,
@@ -42,7 +41,6 @@ import org.apache.openwhisk.core.containerpool.{
 import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.http.Messages
-import spray.json.DefaultJsonProtocol
 
 import scala.annotation.tailrec
 import scala.collection.concurrent.TrieMap
@@ -51,26 +49,6 @@ import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.util.{Random, Try}
 import scala.collection.immutable.Queue
-
-object TotalContainerPoolState extends DefaultJsonProtocol {
-  implicit val prewarmedPoolSerdes = jsonFormat2(PrewarmedContainerPoolState.apply)
-  implicit val warmPoolSerdes = jsonFormat2(WarmContainerPoolState.apply)
-  implicit val totalPoolSerdes = jsonFormat5(TotalContainerPoolState.apply)
-}
-
-case class PrewarmedContainerPoolState(total: Int, countsByKind: Map[String, Int])
-case class WarmContainerPoolState(total: Int, containers: List[BasicContainerInfo])
-case class TotalContainerPoolState(totalContainers: Int,
-                                   inProgressCount: Int,
-                                   prewarmedPool: PrewarmedContainerPoolState,
-                                   busyPool: WarmContainerPoolState,
-                                   pausedPool: WarmContainerPoolState) {
-  def serialize(): String = TotalContainerPoolState.totalPoolSerdes.write(this).compactPrint
-}
-
-case class NotSupportedPoolState() {
-  def serialize(): String = "not supported"
-}
 
 case class CreationContainer(creationMessage: ContainerCreationMessage, action: WhiskAction)
 case class DeletionContainer(deletionMessage: ContainerDeletionMessage)
@@ -103,21 +81,18 @@ class FunctionPullingContainerPool(
   poolConfig: ContainerPoolConfig,
   instance: InvokerInstanceId,
   prewarmConfig: List[PrewarmingConfig] = List.empty,
-  sendAckToScheduler: (SchedulerInstanceId, ContainerCreationAckMessage) => Future[ResultMetadata])(
+  sendAckToScheduler: (SchedulerInstanceId, ContainerCreationAckMessage) => Future[RecordMetadata])(
   implicit val logging: Logging)
     extends Actor {
   import ContainerPoolV2.memoryConsumptionOf
 
   implicit val ec = context.system.dispatcher
 
-  protected[containerpool] var busyPool = immutable.Map.empty[ActorRef, ContainerAvailableData]
-  protected[containerpool] var inProgressPool = immutable.Map.empty[ActorRef, Data]
-  protected[containerpool] var warmedPool = immutable.Map.empty[ActorRef, WarmData]
-  protected[containerpool] var prewarmedPool = immutable.Map.empty[ActorRef, PreWarmData]
-  protected[containerpool] var prewarmStartingPool = immutable.Map.empty[ActorRef, (String, ByteSize)]
-
-  // for shutting down
-  protected[containerpool] var disablingPool = immutable.Set.empty[ActorRef]
+  private var busyPool = immutable.Map.empty[ActorRef, Data]
+  private var inProgressPool = immutable.Map.empty[ActorRef, Data]
+  private var warmedPool = immutable.Map.empty[ActorRef, WarmData]
+  private var prewarmedPool = immutable.Map.empty[ActorRef, PreWarmData]
+  private var prewarmStartingPool = immutable.Map.empty[ActorRef, (String, ByteSize)]
 
   private var shuttingDown = false
 
@@ -135,23 +110,7 @@ class FunctionPullingContainerPool(
       .emitHistogramMetric(LoggingMarkers.INVOKER_CONTAINERPOOL_MEMORY("busy"), memoryConsumptionOf(busyPool))
     MetricEmitter
       .emitHistogramMetric(LoggingMarkers.INVOKER_CONTAINERPOOL_MEMORY("prewarmed"), memoryConsumptionOf(prewarmedPool))
-    MetricEmitter
-      .emitHistogramMetric(LoggingMarkers.INVOKER_CONTAINERPOOL_MEMORY("warmed"), memoryConsumptionOf(warmedPool))
     MetricEmitter.emitHistogramMetric(LoggingMarkers.INVOKER_CONTAINERPOOL_MEMORY("max"), poolConfig.userMemory.toMB)
-    val prewarmedSize = prewarmedPool.size
-    val busySize = busyPool.size
-    val warmedSize = warmedPool.size
-    val warmedPoolMap = warmedPool groupBy {
-      case (_, warmedData) => (warmedData.invocationNamespace, warmedData.action.toString)
-    } mapValues (_.size)
-    for ((data, size) <- warmedPoolMap) {
-      val tags: Option[Map[String, String]] = Some(Map("namespace" -> data._1, "action" -> data._2))
-      MetricEmitter.emitHistogramMetric(LoggingMarkers.INVOKER_CONTAINERPOOL_CONTAINER("warmed", tags), size)
-    }
-    val allSize = prewarmedSize + busySize + warmedSize
-    MetricEmitter.emitHistogramMetric(LoggingMarkers.INVOKER_CONTAINERPOOL_CONTAINER("prewarmed"), prewarmedSize)
-    MetricEmitter.emitHistogramMetric(LoggingMarkers.INVOKER_CONTAINERPOOL_CONTAINER("busy"), busySize)
-    MetricEmitter.emitHistogramMetric(LoggingMarkers.INVOKER_CONTAINERPOOL_CONTAINER("all"), allSize)
   })
 
   // Key is ColdStartKey, value is the number of cold Start in minute
@@ -378,12 +337,18 @@ class FunctionPullingContainerPool(
 
     // Container got removed
     case ContainerRemoved(replacePrewarm) =>
-      inProgressPool = inProgressPool - sender()
-      warmedPool = warmedPool - sender()
-      disablingPool -= sender()
+      inProgressPool.get(sender()).foreach { _ =>
+        inProgressPool = inProgressPool - sender()
+      }
+
+      warmedPool.get(sender()).foreach { _ =>
+        warmedPool = warmedPool - sender()
+      }
 
       // container was busy (busy indicates at full capacity), so there is capacity to accept another job request
-      busyPool = busyPool - sender()
+      busyPool.get(sender()).foreach { _ =>
+        busyPool = busyPool - sender()
+      }
 
       //in case this was a prewarm
       prewarmedPool.get(sender()).foreach { data =>
@@ -435,13 +400,6 @@ class FunctionPullingContainerPool(
       // Reset the prewarmCreateCount value when do expiration check and backfill prewarm if possible
       prewarmCreateFailedCount.set(0)
       adjustPrewarmedContainer(false, true)
-    case GetState =>
-      val totalContainers = busyPool.size + inProgressPool.size + warmedPool.size + prewarmedPool.size
-      val prewarmedState =
-        PrewarmedContainerPoolState(prewarmedPool.size, prewarmedPool.groupBy(_._2.kind).mapValues(_.size).toMap)
-      val busyState = WarmContainerPoolState(busyPool.size, busyPool.values.map(_.basicContainerInfo).toList)
-      val pausedState = WarmContainerPoolState(warmedPool.size, warmedPool.values.map(_.basicContainerInfo).toList)
-      sender() ! TotalContainerPoolState(totalContainers, inProgressPool.size, prewarmedState, busyState, pausedState)
   }
 
   /** Install prewarm containers up to the configured requirements for each kind/memory combination or specified kind/memory */
@@ -627,26 +585,11 @@ class FunctionPullingContainerPool(
    * Make all busyPool's memoryQueue actor shutdown gracefully
    */
   private def waitForPoolToClear(): Unit = {
-    val pool = self
-    // how many busy containers will be removed in this term
-    val slotsForBusyPool = math.max(poolConfig.batchDeletionSize - disablingPool.size, 0)
-    (busyPool.keySet &~ disablingPool)
-      .take(slotsForBusyPool)
-      .foreach(container => {
-        disablingPool += container
-        container ! GracefulShutdown
-      })
-    // how many warm containers will be removed in this term
-    val slotsForWarmPool = math.max(poolConfig.batchDeletionSize - disablingPool.size, 0)
-    (warmedPool.keySet &~ disablingPool)
-      .take(slotsForWarmPool)
-      .foreach(container => {
-        disablingPool += container
-        container ! GracefulShutdown
-      })
-    if (inProgressPool.nonEmpty || busyPool.size + warmedPool.size > slotsForBusyPool + slotsForWarmPool) {
+    busyPool.keys.foreach(_ ! GracefulShutdown)
+    warmedPool.keys.foreach(_ ! GracefulShutdown)
+    if (inProgressPool.nonEmpty) {
       context.system.scheduler.scheduleOnce(5.seconds) {
-        pool ! GracefulShutdown
+        waitForPoolToClear()
       }
     }
   }
@@ -709,13 +652,7 @@ class FunctionPullingContainerPool(
       case Some(((proxy, data), containerState)) =>
         // record creationMessage so when container created failed, we can send failed message to scheduler
         creationMessages.getOrElseUpdate(proxy, create)
-        proxy ! Initialize(
-          create.invocationNamespace,
-          create.action,
-          executable,
-          create.schedulerHost,
-          create.rpcPort,
-          create.transid)
+        proxy ! Initialize(create.invocationNamespace, executable, create.schedulerHost, create.rpcPort, create.transid)
         inProgressPool = inProgressPool + (proxy -> data)
         logContainerStart(create, executable.toWhiskAction, containerState)
 
@@ -904,7 +841,7 @@ object ContainerPoolV2 {
             poolConfig: ContainerPoolConfig,
             instance: InvokerInstanceId,
             prewarmConfig: List[PrewarmingConfig] = List.empty,
-            sendAckToScheduler: (SchedulerInstanceId, ContainerCreationAckMessage) => Future[ResultMetadata])(
+            sendAckToScheduler: (SchedulerInstanceId, ContainerCreationAckMessage) => Future[RecordMetadata])(
     implicit logging: Logging): Props = {
     Props(
       new FunctionPullingContainerPool(

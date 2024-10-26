@@ -18,9 +18,10 @@
 package org.apache.openwhisk.standalone
 
 import java.io.File
+
 import akka.actor.ActorSystem
 import kafka.server.KafkaConfig
-import io.github.embeddedkafka.{EmbeddedKafka, EmbeddedKafkaConfig}
+import net.manub.embeddedkafka.{EmbeddedKafka, EmbeddedKafkaConfig}
 import org.apache.commons.io.FileUtils
 import org.apache.openwhisk.common.{Logging, TransactionId}
 import org.apache.openwhisk.core.WhiskConfig
@@ -29,7 +30,6 @@ import org.apache.openwhisk.core.entity.ControllerInstanceId
 import org.apache.openwhisk.core.loadBalancer.{LeanBalancer, LoadBalancer, LoadBalancerProvider}
 import org.apache.openwhisk.standalone.StandaloneDockerSupport.{checkOrAllocatePort, containerName, createRunCmd}
 
-import java.nio.file.FileSystems
 import scala.concurrent.{ExecutionContext, Future}
 import scala.reflect.io.Directory
 import scala.util.Try
@@ -66,10 +66,8 @@ class KafkaLauncher(
       EmbeddedKafkaConfig(kafkaPort = kafkaPort, zooKeeperPort = zkPort, customBrokerProperties = brokerProps)
 
     val t = Try {
-      createDir("zookeeper")
-      createDir("kafka")
-      EmbeddedKafka.startZooKeeper(FileSystems.getDefault.getPath(workDir.getPath, "zookeeper"))
-      EmbeddedKafka.startKafka(FileSystems.getDefault.getPath(workDir.getPath, "kafka"))
+      EmbeddedKafka.startZooKeeper(createDir("zookeeper"))
+      EmbeddedKafka.startKafka(createDir("kafka"))
     }
 
     Future

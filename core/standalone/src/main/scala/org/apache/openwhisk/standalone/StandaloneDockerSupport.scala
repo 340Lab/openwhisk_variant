@@ -211,9 +211,8 @@ class StandaloneDockerClient(pullDisabled: Boolean)(implicit log: Logging, as: A
     if (pullDisabled) Future.successful(()) else super.pull(image)
   }
 
-  override def runCmd(args: Seq[String], timeout: Duration, maskedArgs: Option[Seq[String]] = None)(
-    implicit transid: TransactionId): Future[String] =
-    super.runCmd(args, timeout, maskedArgs)
+  override def runCmd(args: Seq[String], timeout: Duration)(implicit transid: TransactionId): Future[String] =
+    super.runCmd(args, timeout)
 
   val clientConfig: DockerClientConfig = loadConfigOrThrow[DockerClientConfig](ConfigKeys.dockerClient)
 
@@ -222,7 +221,7 @@ class StandaloneDockerClient(pullDisabled: Boolean)(implicit log: Logging, as: A
     for {
       _ <- if (shouldPull) pull(image) else Future.successful(())
       id <- run(image, args).recoverWith {
-        case t @ BrokenDockerContainer(brokenId, _, _) =>
+        case t @ BrokenDockerContainer(brokenId, _) =>
           // Remove the broken container - but don't wait or check for the result.
           // If the removal fails, there is nothing we could do to recover from the recovery.
           rm(brokenId)

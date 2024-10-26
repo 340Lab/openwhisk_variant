@@ -241,13 +241,6 @@ Components = [
                   'deploy elasticsearch',
                   modes = 'clean'),
 
-    makeComponent('mongodb',
-                  'deploy mongodb',
-                  modes = 'clean'),
-
-    makeComponent('initMongoDB',
-                  'initialize mongodb with guest/system keys'),
-
     makeComponent('build',
                   'build system',
                   yaml = False,
@@ -271,11 +264,6 @@ Components = [
                   'build/deploy controller',
                   modes = 'clean',
                   gradle = 'core:controller'),
-
-    makeComponent('scheduler',
-                  'build/deploy scheduler',
-                  modes = 'clean',
-                  gradle = 'core:scheduler'),
 
     makeComponent('invoker',
                   'build/deploy invoker',

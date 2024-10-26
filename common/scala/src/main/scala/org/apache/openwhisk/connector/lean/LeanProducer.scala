@@ -18,11 +18,13 @@
 package org.apache.openwhisk.connector.lean
 
 import akka.actor.ActorSystem
-
 import scala.concurrent.Future
+import org.apache.kafka.clients.producer.RecordMetadata
+import org.apache.kafka.common.TopicPartition
 import org.apache.openwhisk.common.Counter
 import org.apache.openwhisk.common.Logging
-import org.apache.openwhisk.core.connector.{Message, MessageProducer, ResultMetadata}
+import org.apache.openwhisk.core.connector.Message
+import org.apache.openwhisk.core.connector.MessageProducer
 
 import java.util.concurrent.{BlockingQueue, LinkedBlockingQueue}
 import scala.collection.mutable.Map
@@ -37,7 +39,7 @@ class LeanProducer(queues: Map[String, BlockingQueue[Array[Byte]]])(implicit log
   override def sentCount(): Long = sentCounter.cur
 
   /** Sends msg to topic. This is an asynchronous operation. */
-  override def send(topic: String, msg: Message, retry: Int = 3): Future[ResultMetadata] = {
+  override def send(topic: String, msg: Message, retry: Int = 3): Future[RecordMetadata] = {
     implicit val transid = msg.transid
 
     val queue = queues.getOrElseUpdate(topic, new LinkedBlockingQueue[Array[Byte]]())
@@ -45,7 +47,7 @@ class LeanProducer(queues: Map[String, BlockingQueue[Array[Byte]]])(implicit log
     Future {
       queue.put(msg.serialize.getBytes(StandardCharsets.UTF_8))
       sentCounter.next()
-      ResultMetadata(topic, 0, -1)
+      new RecordMetadata(new TopicPartition(topic, 0), -1, -1, System.currentTimeMillis(), null, -1, -1)
     }
   }
 

@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.LongAdder
 
 import akka.actor.ActorSystem
 import akka.event.Logging.InfoLevel
+import org.apache.kafka.clients.producer.RecordMetadata
 import pureconfig._
 import pureconfig.generic.auto._
 import org.apache.openwhisk.common.LoggingMarkers._
@@ -60,8 +61,6 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
   protected[loadBalancer] val activationPromises =
     TrieMap[ActivationId, Promise[Either[ActivationId, WhiskActivation]]]()
   protected val activationsPerNamespace = TrieMap[UUID, LongAdder]()
-  protected val activationsPerController = TrieMap[ControllerInstanceId, LongAdder]()
-  protected val activationsPerInvoker = TrieMap[InvokerInstanceId, LongAdder]()
   protected val totalActivations = new LongAdder()
   protected val totalBlackBoxActivationMemory = new LongAdder()
   protected val totalManagedActivationMemory = new LongAdder()
@@ -84,15 +83,6 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
   override def activeActivationsFor(namespace: UUID): Future[Int] =
     Future.successful(activationsPerNamespace.get(namespace).map(_.intValue).getOrElse(0))
   override def totalActiveActivations: Future[Int] = Future.successful(totalActivations.intValue)
-  override def activeActivationsByController(controller: String): Future[Int] =
-    Future.successful(activationsPerController.get(ControllerInstanceId(controller)).map(_.intValue()).getOrElse(0))
-  override def activeActivationsByController: Future[List[(String, String)]] =
-    Future.successful(
-      activationSlots.values.map(entry => (entry.id.asString, entry.fullyQualifiedEntityName.toString)).toList)
-  override def activeActivationsByInvoker(invoker: String): Future[Int] =
-    Future.successful(
-      activationsPerInvoker.get(InvokerInstanceId(invoker.toInt, userMemory = 0.MB)).map(_.intValue()).getOrElse(0))
-  override def close: Unit = activationFeed ! GracefulShutdown
 
   /**
    * Calculate the duration within which a completion ack must be received for an activation.
@@ -135,10 +125,6 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
     totalActivationMemory.add(action.limits.memory.megabytes)
 
     activationsPerNamespace.getOrElseUpdate(msg.user.namespace.uuid, new LongAdder()).increment()
-    activationsPerController.getOrElseUpdate(controllerInstance, new LongAdder()).increment()
-    activationsPerInvoker
-      .getOrElseUpdate(InvokerInstanceId(instance.instance, userMemory = 0.MB), new LongAdder())
-      .increment()
 
     // Completion Ack must be received within the calculated time.
     val completionAckTimeout = calculateCompletionAckTimeout(action.limits.timeout.duration)
@@ -176,8 +162,7 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
           action.fullyQualifiedName(true),
           timeoutHandler,
           isBlackboxInvocation,
-          msg.blocking,
-          controllerInstance)
+          msg.blocking)
       })
 
     resultPromise
@@ -189,7 +174,7 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
   /** 3. Send the activation to the invoker */
   protected def sendActivationToInvoker(producer: MessageProducer,
                                         msg: ActivationMessage,
-                                        invoker: InvokerInstanceId): Future[ResultMetadata] = {
+                                        invoker: InvokerInstanceId): Future[RecordMetadata] = {
     implicit val transid: TransactionId = msg.transid
 
     val topic = s"${Controller.topicPrefix}invoker${invoker.toInt}"
@@ -206,7 +191,7 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
         transid.finished(
           this,
           start,
-          s"posted to ${status.topic}[${status.partition}][${status.offset}]",
+          s"posted to ${status.topic()}[${status.partition()}][${status.offset()}]",
           logLevel = InfoLevel)
       case Failure(_) => transid.failed(this, start, s"error on posting to topic $topic")
     }
@@ -219,19 +204,19 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
   /** 4. Get the ack message and parse it */
   protected[loadBalancer] def processAcknowledgement(bytes: Array[Byte]): Future[Unit] = Future {
     val raw = new String(bytes, StandardCharsets.UTF_8)
-    AcknowledgementMessage.parse(raw) match {
-      case Success(acknowledgement) =>
-        acknowledgement.isSlotFree.foreach { instance =>
+    AcknowledegmentMessage.parse(raw) match {
+      case Success(acknowledegment) =>
+        acknowledegment.isSlotFree.foreach { instance =>
           processCompletion(
-            acknowledgement.activationId,
-            acknowledgement.transid,
+            acknowledegment.activationId,
+            acknowledegment.transid,
             forced = false,
-            isSystemError = acknowledgement.isSystemError.getOrElse(false),
+            isSystemError = acknowledegment.isSystemError.getOrElse(false),
             instance)
         }
 
-        acknowledgement.result.foreach { response =>
-          processResult(acknowledgement.activationId, acknowledgement.transid, response)
+        acknowledegment.result.foreach { response =>
+          processResult(acknowledegment.activationId, acknowledegment.transid, response)
         }
 
         activationFeed ! MessageFeed.Processed
@@ -242,7 +227,7 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
 
       case _ =>
         activationFeed ! MessageFeed.Processed
-        logging.error(this, s"Unexpected Acknowledgement message received by loadbalancer: $raw")
+        logging.error(this, s"Unexpected Acknowledgment message received by loadbalancer: $raw")
     }
   }
 
@@ -302,10 +287,6 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
           if (entry.isBlackbox) totalBlackBoxActivationMemory else totalManagedActivationMemory
         totalActivationMemory.add(entry.memoryLimit.toMB * (-1))
         activationsPerNamespace.get(entry.namespaceId).foreach(_.decrement())
-        activationsPerController.get(entry.controllerId).foreach(_.decrement())
-        activationsPerInvoker
-          .get(InvokerInstanceId(entry.invokerName.instance, userMemory = 0.MB))
-          .foreach(_.decrement())
 
         invoker.foreach(releaseInvoker(_, entry))
 

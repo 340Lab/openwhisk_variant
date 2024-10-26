@@ -38,7 +38,7 @@ import spray.json._
 import org.apache.openwhisk.common.{Logging, TransactionId}
 import org.apache.openwhisk.core.ack.ActiveAck
 import org.apache.openwhisk.core.connector.{
-  AcknowledgementMessage,
+  AcknowledegmentMessage,
   ActivationMessage,
   CombinedCompletionAndResultMessage,
   CompletionMessage,
@@ -87,7 +87,7 @@ class ContainerProxyTests
   val action = ExecutableWhiskAction(EntityPath("actionSpace"), EntityName("actionName"), exec)
 
   val concurrencyEnabled = Option(WhiskProperties.getProperty("whisk.action.concurrency", "false")).exists(_.toBoolean)
-  val testConcurrencyLimit = if (concurrencyEnabled) IntraConcurrencyLimit(2) else IntraConcurrencyLimit(1)
+  val testConcurrencyLimit = if (concurrencyEnabled) ConcurrencyLimit(2) else ConcurrencyLimit(1)
   val concurrentAction = ExecutableWhiskAction(
     EntityPath("actionSpace"),
     EntityName("actionName"),
@@ -177,7 +177,7 @@ class ContainerProxyTests
 
   trait LoggedAcker extends ActiveAck {
     def calls =
-      mutable.Buffer[(TransactionId, WhiskActivation, Boolean, ControllerInstanceId, UUID, AcknowledgementMessage)]()
+      mutable.Buffer[(TransactionId, WhiskActivation, Boolean, ControllerInstanceId, UUID, AcknowledegmentMessage)]()
 
     def verifyAnnotations(activation: WhiskActivation, a: ExecutableWhiskAction) = {
       activation.annotations.get("limits") shouldBe Some(a.limits.toJson)
@@ -194,7 +194,7 @@ class ContainerProxyTests
        _: Boolean,
        _: ControllerInstanceId,
        _: UUID,
-       _: AcknowledgementMessage) =>
+       _: AcknowledegmentMessage) =>
         Future.successful(())
     }
 
@@ -205,9 +205,9 @@ class ContainerProxyTests
                        blockingInvoke: Boolean,
                        controllerInstance: ControllerInstanceId,
                        userId: UUID,
-                       acknowledgement: AcknowledgementMessage): Future[Any] = {
+                       acknowledegment: AcknowledegmentMessage): Future[Any] = {
       verifyAnnotations(activation, a)
-      acker(tid, activation, blockingInvoke, controllerInstance, userId, acknowledgement)
+      acker(tid, activation, blockingInvoke, controllerInstance, userId, acknowledegment)
     }
   }
 
@@ -219,7 +219,7 @@ class ContainerProxyTests
        _: Boolean,
        _: ControllerInstanceId,
        _: UUID,
-       _: AcknowledgementMessage) =>
+       _: AcknowledegmentMessage) =>
         Future.successful(())
     }
 
@@ -230,22 +230,15 @@ class ContainerProxyTests
                        blockingInvoke: Boolean,
                        controllerInstance: ControllerInstanceId,
                        userId: UUID,
-                       acknowledgement: AcknowledgementMessage): Future[Any] = {
+                       acknowledegment: AcknowledegmentMessage): Future[Any] = {
       verifyAnnotations(activation, a)
-      acker(tid, activation, blockingInvoke, controllerInstance, userId, acknowledgement)
+      acker(tid, activation, blockingInvoke, controllerInstance, userId, acknowledegment)
     }
   }
 
   /** Creates an inspectable factory */
   def createFactory(response: Future[Container]) = LoggedFunction {
-    (_: TransactionId,
-     _: String,
-     _: ImageName,
-     _: Boolean,
-     _: ByteSize,
-     _: Int,
-     _: Option[Double],
-     _: Option[ExecutableWhiskAction]) =>
+    (_: TransactionId, _: String, _: ImageName, _: Boolean, _: ByteSize, _: Int, _: Option[ExecutableWhiskAction]) =>
       response
   }
 
@@ -283,7 +276,7 @@ class ContainerProxyTests
     (transid: TransactionId, activation: WhiskActivation, isBlockingActivation: Boolean, context: UserContext) =>
       Future.successful(())
   }
-  val poolConfig = ContainerPoolConfig(2.MB, 0.5, false, 2.second, 1.minute, None, 100, 3, false, 1.second, 10)
+  val poolConfig = ContainerPoolConfig(2.MB, 0.5, false, 2.second, 1.minute, None, 100, 3, false, 1.second)
   def healthchecksConfig(enabled: Boolean = false) = ContainerProxyHealthCheckConfig(enabled, 100.milliseconds, 2)
   val filterEnvVar = (k: String) => Character.isUpperCase(k.charAt(0))
 
@@ -339,7 +332,7 @@ class ContainerProxyTests
     preWarm(machine)
 
     factory.calls should have size 1
-    val (tid, name, _, _, memory, cpuShares, _, _) = factory.calls(0)
+    val (tid, name, _, _, memory, cpuShares, _) = factory.calls(0)
     tid shouldBe TransactionId.invokerWarmup
     name should fullyMatch regex """wskmyname\d+_\d+_prewarm_actionKind"""
     memory shouldBe memoryLimit
@@ -1345,12 +1338,10 @@ class ContainerProxyTests
     timeout) {
     val container = new TestContainer {
       override def run(
-        parameters: JsValue,
+        parameters: JsObject,
         environment: JsObject,
         timeout: FiniteDuration,
         concurrent: Int,
-        maxResponse: ByteSize,
-        truncation: ByteSize,
         reschedule: Boolean = false)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
         atomicRunCount.incrementAndGet()
         //every other run fails
@@ -1528,12 +1519,10 @@ class ContainerProxyTests
     timeout) {
     val container = new TestContainer {
       override def run(
-        parameters: JsValue,
+        parameters: JsObject,
         environment: JsObject,
         timeout: FiniteDuration,
         concurrent: Int,
-        maxResponse: ByteSize,
-        truncation: ByteSize,
         reschedule: Boolean = false)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
         atomicRunCount.incrementAndGet()
         Future.successful((initInterval, ActivationResponse.developerError(("boom"))))
@@ -1699,18 +1688,16 @@ class ContainerProxyTests
   it should "resend the job to the parent if /run fails connection after Paused -> Running" in within(timeout) {
     val container = new TestContainer {
       override def run(
-        parameters: JsValue,
+        parameters: JsObject,
         environment: JsObject,
         timeout: FiniteDuration,
         concurrent: Int,
-        maxResponse: ByteSize,
-        truncation: ByteSize,
         reschedule: Boolean = false)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
 
         if (reschedule) {
           throw ContainerHealthError(transid, "reconnect failed to xyz")
         }
-        super.run(parameters, environment, timeout, concurrent, maxResponse, truncation, reschedule)
+        super.run(parameters, environment, timeout, concurrent, reschedule)
       }
     }
     val factory = createFactory(Future.successful(container))
@@ -1753,18 +1740,16 @@ class ContainerProxyTests
   it should "resend the job to the parent if /run fails connection after Ready -> Running" in within(timeout) {
     val container = new TestContainer {
       override def run(
-        parameters: JsValue,
+        parameters: JsObject,
         environment: JsObject,
         timeout: FiniteDuration,
         concurrent: Int,
-        maxResponse: ByteSize,
-        truncation: ByteSize,
         reschedule: Boolean = false)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
 
         if (reschedule) {
           throw ContainerHealthError(transid, "reconnect failed to xyz")
         }
-        super.run(parameters, environment, timeout, concurrent, maxResponse, truncation, reschedule)
+        super.run(parameters, environment, timeout, concurrent, reschedule)
       }
     }
     val factory = createFactory(Future.successful(container))
@@ -2175,12 +2160,10 @@ class ContainerProxyTests
       initPromise.map(_.future).getOrElse(Future.successful(initInterval))
     }
     override def run(
-      parameters: JsValue,
+      parameters: JsObject,
       environment: JsObject,
       timeout: FiniteDuration,
       concurrent: Int,
-      maxResponse: ByteSize,
-      truncation: ByteSize,
       reschedule: Boolean = false)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
 
       // the "init" arguments are not passed on run

@@ -17,10 +17,14 @@
 
 package org.apache.openwhisk.core.invoker.test
 
+import java.nio.charset.StandardCharsets
+
 import akka.actor.ActorSystem
 import akka.testkit.{TestKit, TestProbe}
 import common.StreamLogging
+import org.apache.kafka.clients.producer.RecordMetadata
 import org.apache.openwhisk.common.{Logging, TransactionId}
+import org.apache.openwhisk.core.{WarmUp, WhiskConfig}
 import org.apache.openwhisk.core.connector.ContainerCreationError._
 import org.apache.openwhisk.core.connector._
 import org.apache.openwhisk.core.connector.test.TestConnector
@@ -31,7 +35,6 @@ import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.entity.test.ExecHelpers
 import org.apache.openwhisk.core.invoker.ContainerMessageConsumer
-import org.apache.openwhisk.core.{WarmUp, WhiskConfig}
 import org.apache.openwhisk.http.Messages
 import org.apache.openwhisk.utils.{retry => utilRetry}
 import org.junit.runner.RunWith
@@ -39,7 +42,6 @@ import org.scalamock.scalatest.MockFactory
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, FlatSpecLike, Matchers}
 
-import java.nio.charset.StandardCharsets
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.util.Try
@@ -61,8 +63,6 @@ class ContainerMessageConsumerTests
   implicit val transId = TransactionId.testing
   implicit val creationId = CreationId.generate()
 
-  val authStore = WhiskAuthStore.datastore()
-
   override def afterAll(): Unit = {
     TestKit.shutdownActorSystem(system)
     super.afterAll()
@@ -83,20 +83,11 @@ class ContainerMessageConsumerTests
   private val invokerInstance = InvokerInstanceId(0, userMemory = defaultUserMemory)
   private val schedulerInstanceId = SchedulerInstanceId("0")
 
-  /* Subject document needed for the second test */
   private val invocationNamespace = EntityName("invocationSpace")
-  private val uuid = UUID()
-  private val ak = BasicAuthenticationAuthKey(uuid, Secret())
-  private val ns = Namespace(invocationNamespace, uuid)
-  private val auth = WhiskAuth(Subject(), Set(WhiskNamespace(ns, ak)))
 
   private val schedulerHost = "127.17.0.1"
 
   private val rpcPort = 13001
-
-  override def beforeAll() = {
-    put(authStore, auth)
-  }
 
   override def afterEach(): Unit = {
     cleanup()
@@ -124,7 +115,7 @@ class ContainerMessageConsumerTests
   }
 
   def sendAckToScheduler(producer: MessageProducer)(schedulerInstanceId: SchedulerInstanceId,
-                                                    ackMessage: ContainerCreationAckMessage): Future[ResultMetadata] = {
+                                                    ackMessage: ContainerCreationAckMessage): Future[RecordMetadata] = {
     val topic = s"creationAck${schedulerInstanceId.asString}"
     producer.send(topic, ackMessage)
   }
@@ -163,7 +154,7 @@ class ContainerMessageConsumerTests
         500,
         sendAckToScheduler(producer))
 
-    val exec = CodeExecAsString(RuntimeManifest("nodejs:20", ImageName("testImage")), "testCode", None)
+    val exec = CodeExecAsString(RuntimeManifest("nodejs:10", ImageName("testImage")), "testCode", None)
     val action =
       WhiskAction(EntityPath("testns"), EntityName("testAction"), exec, limits = ActionLimits(TimeLimit(1.minute)))
     put(entityStore, action)
@@ -218,7 +209,7 @@ class ContainerMessageConsumerTests
         500,
         sendAckToScheduler(ackConsumer.getProducer()))
 
-    val exec = CodeExecAsString(RuntimeManifest("nodejs:20", ImageName("testImage")), "testCode", None)
+    val exec = CodeExecAsString(RuntimeManifest("nodejs:10", ImageName("testImage")), "testCode", None)
     val whiskAction =
       WhiskAction(EntityPath("testns"), EntityName("testAction2"), exec, limits = ActionLimits(TimeLimit(1.minute)))
     val execMetadata =
@@ -264,7 +255,7 @@ class ContainerMessageConsumerTests
     put(entityStore, whiskAction)
     val actualCreationMessage = creationMessage.copy(revision = DocRevision("1-fake"))
     val fetchErrorAckMessage =
-      createAckMsg(actualCreationMessage, Some(DBFetchError), Some(Messages.actionMismatchWhileInvoking))
+      createAckMsg(actualCreationMessage, Some(DBFetchError), Some(Messages.actionFetchErrorWhileInvoking))
     creationConsumer.send(actualCreationMessage)
 
     within(5.seconds) {
@@ -294,7 +285,7 @@ class ContainerMessageConsumerTests
         500,
         sendAckToScheduler(producer))
 
-    val exec = CodeExecAsString(RuntimeManifest("nodejs:20", ImageName("testImage")), "testCode", None)
+    val exec = CodeExecAsString(RuntimeManifest("nodejs:10", ImageName("testImage")), "testCode", None)
     val action =
       WhiskAction(
         WarmUp.warmUpAction.namespace.toPath,

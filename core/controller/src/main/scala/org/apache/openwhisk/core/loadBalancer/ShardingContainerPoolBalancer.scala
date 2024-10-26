@@ -26,6 +26,7 @@ import akka.cluster.ClusterEvent._
 import akka.cluster.{Cluster, Member, MemberStatus}
 import akka.management.scaladsl.AkkaManagement
 import akka.management.cluster.bootstrap.ClusterBootstrap
+import org.apache.kafka.clients.producer.RecordMetadata
 import org.apache.openwhisk.common.InvokerState.{Healthy, Offline, Unhealthy, Unresponsive}
 import pureconfig._
 import pureconfig.generic.auto._
@@ -339,7 +340,7 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
         actorRefFactory: ActorRefFactory,
         messagingProvider: MessagingProvider,
         messagingProducer: MessageProducer,
-        sendActivationToInvoker: (MessageProducer, ActivationMessage, InvokerInstanceId) => Future[ResultMetadata],
+        sendActivationToInvoker: (MessageProducer, ActivationMessage, InvokerInstanceId) => Future[RecordMetadata],
         monitor: Option[ActorRef]): ActorRef = {
 
         InvokerPool.prepare(instance, WhiskEntityStore.datastore())
@@ -616,7 +617,6 @@ case class ShardingContainerPoolBalancerConfig(managedFraction: Double,
  * @param timeoutHandler times out completion of this activation, should be canceled on good paths
  * @param isBlackbox true if the invoked action is a blackbox action, otherwise false (managed action)
  * @param isBlocking true if the action is invoked in a blocking fashion, i.e. "somebody" waits for the result
- * @param controllerId id of the controller that this activation comes from
  */
 case class ActivationEntry(id: ActivationId,
                            namespaceId: UUID,
@@ -627,5 +627,4 @@ case class ActivationEntry(id: ActivationId,
                            fullyQualifiedEntityName: FullyQualifiedEntityName,
                            timeoutHandler: Cancellable,
                            isBlackbox: Boolean,
-                           isBlocking: Boolean,
-                           controllerId: ControllerInstanceId = ControllerInstanceId("0"))
+                           isBlocking: Boolean)

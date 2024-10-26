@@ -79,7 +79,7 @@ class ElasticSearchLogStore(
     elasticSearchConfig.protocol,
     elasticSearchConfig.host,
     elasticSearchConfig.port,
-    httpFlow)(system, system.dispatcher)
+    httpFlow)
 
   private def transcribeLogs(queryResult: EsSearchResult): ActivationLogs =
     ActivationLogs(queryResult.hits.hits.map(_.source.convertTo[UserLogEntry].toFormattedString))

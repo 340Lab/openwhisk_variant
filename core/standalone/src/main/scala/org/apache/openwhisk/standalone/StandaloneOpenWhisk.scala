@@ -175,11 +175,11 @@ object StandaloneOpenWhisk extends SLF4JLogging {
      |  "runtimes": {
      |    "nodejs": [
      |      {
-     |        "kind": "nodejs:20",
+     |        "kind": "nodejs:14",
      |        "default": true,
      |        "image": {
      |          "prefix": "openwhisk",
-     |          "name": "action-nodejs-v20",
+     |          "name": "action-nodejs-v14",
      |          "tag": "latest"
      |        },
      |        "deprecated": false,

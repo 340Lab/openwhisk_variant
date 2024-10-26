@@ -46,7 +46,7 @@ ext {
     dockerRetries = project.hasProperty('dockerRetries') ? dockerRetries.toInteger() : 3
     dockerBinary = project.hasProperty('dockerBinary') ? [dockerBinary] : ['docker']
     dockerBuildArg = ['build']
-    dockerDockerfileSuffix = project.hasProperty('dockerDockerfileSuffix') ? dockerDockerfileSuffix : ""
+    dockerDockerfileSuffix = ""
 }
 ext.dockerTaggedImageName = dockerRegistry + dockerImagePrefix + '/' + dockerImageName + ':' + dockerImageTag
 
@@ -58,6 +58,10 @@ if(project.hasProperty('dockerBuildArgs')) {
     dockerBuildArgs.each { arg  ->
         dockerBuildArg += ['--build-arg', arg]
     }
+}
+
+if(project.hasProperty('dockerfileSuffix')) {
+    dockerDockerfileSuffix = project.dockerfileSuffix
 }
 
 task distDocker {

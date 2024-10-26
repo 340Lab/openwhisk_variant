@@ -23,7 +23,7 @@ import org.scalatest.junit.JUnitRunner
 import spray.json._
 import org.apache.openwhisk.common.{TransactionId, WhiskInstants}
 import org.apache.openwhisk.core.connector.{
-  AcknowledgementMessage,
+  AcknowledegmentMessage,
   CombinedCompletionAndResultMessage,
   CompletionMessage,
   ResultMessage
@@ -60,7 +60,7 @@ class AcknowledgementMessageTests extends FlatSpec with Matchers with WhiskInsta
     m.isSlotFree shouldBe empty
     m.serialize shouldBe JsObject("transid" -> m.transid.toJson, "response" -> m.response.left.get.toJson).compactPrint
     m.serialize shouldBe m.toJson.compactPrint
-    AcknowledgementMessage.parse(m.serialize) shouldBe Success(m)
+    AcknowledegmentMessage.parse(m.serialize) shouldBe Success(m)
   }
 
   it should "serialize and deserialize a Result message with Right result" in {
@@ -68,7 +68,7 @@ class AcknowledgementMessageTests extends FlatSpec with Matchers with WhiskInsta
     m.response shouldBe 'right
     m.isSlotFree shouldBe empty
     m.serialize shouldBe JsObject("transid" -> m.transid.toJson, "response" -> m.response.right.get.toJson).compactPrint
-    AcknowledgementMessage.parse(m.serialize) shouldBe Success(m)
+    AcknowledegmentMessage.parse(m.serialize) shouldBe Success(m)
   }
 
   it should "serialize and deserialize a Completion message" in {
@@ -79,7 +79,7 @@ class AcknowledgementMessageTests extends FlatSpec with Matchers with WhiskInsta
       InvokerInstanceId(0, userMemory = defaultUserMemory))
     m.isSlotFree should not be empty
     m.serialize shouldBe m.toJson.compactPrint
-    AcknowledgementMessage.parse(m.serialize) shouldBe Success(m)
+    AcknowledegmentMessage.parse(m.serialize) shouldBe Success(m)
   }
 
   it should "serialize and deserialize a CombinedCompletionAndResultMessage" in {
@@ -92,7 +92,7 @@ class AcknowledgementMessageTests extends FlatSpec with Matchers with WhiskInsta
       c.isSlotFree should not be empty
       c.isSystemError shouldBe Some(false)
       c.serialize shouldBe c.toJson.compactPrint
-      AcknowledgementMessage.parse(c.serialize) shouldBe Success(c)
+      AcknowledegmentMessage.parse(c.serialize) shouldBe Success(c)
     }
 
     withClue("system error true and right") {
@@ -106,7 +106,7 @@ class AcknowledgementMessageTests extends FlatSpec with Matchers with WhiskInsta
       c.isSlotFree should not be empty
       c.isSystemError shouldBe Some(true)
       c.serialize shouldBe c.toJson.compactPrint
-      AcknowledgementMessage.parse(c.serialize) shouldBe Success(c)
+      AcknowledegmentMessage.parse(c.serialize) shouldBe Success(c)
     }
 
     withClue("system error false and left") {
@@ -118,7 +118,7 @@ class AcknowledgementMessageTests extends FlatSpec with Matchers with WhiskInsta
       c.isSlotFree should not be empty
       c.isSystemError shouldBe Some(false)
       c.serialize shouldBe c.toJson.compactPrint
-      AcknowledgementMessage.parse(c.serialize) shouldBe Success(c)
+      AcknowledegmentMessage.parse(c.serialize) shouldBe Success(c)
     }
 
     withClue("system error true and left") {
@@ -132,7 +132,7 @@ class AcknowledgementMessageTests extends FlatSpec with Matchers with WhiskInsta
       c.isSlotFree should not be empty
       c.isSystemError shouldBe Some(true)
       c.serialize shouldBe c.toJson.compactPrint
-      AcknowledgementMessage.parse(c.serialize) shouldBe Success(c)
+      AcknowledegmentMessage.parse(c.serialize) shouldBe Success(c)
     }
   }
 }

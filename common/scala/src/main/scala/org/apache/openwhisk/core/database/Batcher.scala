@@ -49,10 +49,9 @@ import akka.stream.scaladsl.{Sink, Source}
  * @tparam T the type to be batched
  * @tparam R return type of a single element after operation
  */
-class Batcher[T, R](batchSize: Int, concurrency: Int, retry: Int)(operation: (Seq[T], Int) => Future[Seq[R]])(
-  implicit
-  system: ActorSystem,
-  ec: ExecutionContext) {
+class Batcher[T, R](batchSize: Int, concurrency: Int)(operation: Seq[T] => Future[Seq[R]])(implicit
+                                                                                           system: ActorSystem,
+                                                                                           ec: ExecutionContext) {
 
   val cm: PartialFunction[Any, CompletionStrategy] = {
     case Done =>
@@ -70,7 +69,7 @@ class Batcher[T, R](batchSize: Int, concurrency: Int, retry: Int)(operation: (Se
       val elements = els.map(_._1)
       val promises = els.map(_._2)
 
-      val f = operation(elements, retry)
+      val f = operation(elements)
       f.onComplete {
         case Success(results) => results.zip(promises).foreach { case (result, p) => p.success(result) }
         case Failure(e)       => promises.foreach(_.failure(e))

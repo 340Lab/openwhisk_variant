@@ -123,8 +123,7 @@ class YARNContainerFactory(actorSystem: ActorSystem,
     actionImage: ExecManifest.ImageName,
     unuseduserProvidedImage: Boolean,
     unusedmemory: ByteSize,
-    unusedcpuShares: Int,
-    unusedcpuLimit: Option[Double])(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
+    unusedcpuShares: Int)(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
     implicit val timeout: Timeout = Timeout(containerStartTimeoutMS.milliseconds)
 
     //First send the create command to YARN, then with a different actor, wait for the container to be ready

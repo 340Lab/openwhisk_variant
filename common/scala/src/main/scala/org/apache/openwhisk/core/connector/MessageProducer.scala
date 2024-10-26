@@ -19,13 +19,15 @@ package org.apache.openwhisk.core.connector
 
 import scala.concurrent.Future
 
+import org.apache.kafka.clients.producer.RecordMetadata
+
 trait MessageProducer {
 
   /** Count of messages sent. */
   def sentCount(): Long
 
   /** Sends msg to topic. This is an asynchronous operation. */
-  def send(topic: String, msg: Message, retry: Int = 0): Future[ResultMetadata]
+  def send(topic: String, msg: Message, retry: Int = 0): Future[RecordMetadata]
 
   /** Closes producer. */
   def close(): Unit

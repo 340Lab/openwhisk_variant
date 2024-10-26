@@ -35,8 +35,8 @@ trait ExecHelpers extends Matchers with WskActorSystem with StreamLogging {
   private val config = new WhiskConfig(ExecManifest.requiredProperties)
   ExecManifest.initialize(config) should be a 'success
 
-  protected val NODEJS = "nodejs:20"
-  protected val SWIFT5 = "swift:5.3"
+  protected val NODEJS = "nodejs:14"
+  protected val SWIFT4 = "swift:4.2"
   protected val BLACKBOX = "blackbox"
   protected val JAVA_DEFAULT = "java:8"
 
@@ -101,7 +101,7 @@ trait ExecHelpers extends Matchers with WskActorSystem with StreamLogging {
 
   protected def swift(code: String, main: Option[String] = None) = {
     val attachment = attFmt[String].read(code.trim.toJson)
-    val manifest = ExecManifest.runtimesManifest.resolveDefaultRuntime(SWIFT5).get
+    val manifest = ExecManifest.runtimesManifest.resolveDefaultRuntime(SWIFT4).get
 
     CodeExecAsAttachment(manifest, attachment, main.map(_.trim), Exec.isBinaryCode(code))
   }
@@ -124,5 +124,5 @@ trait ExecHelpers extends Matchers with WskActorSystem with StreamLogging {
   }
 
   protected def actionLimits(memory: ByteSize, concurrency: Int): ActionLimits =
-    ActionLimits(memory = MemoryLimit(memory), concurrency = IntraConcurrencyLimit(concurrency))
+    ActionLimits(memory = MemoryLimit(memory), concurrency = ConcurrencyLimit(concurrency))
 }
